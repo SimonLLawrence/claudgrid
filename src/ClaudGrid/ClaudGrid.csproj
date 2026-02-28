@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net7.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ClaudGrid</RootNamespace>
+    <AssemblyName>ClaudGrid</AssemblyName>
+    <Optimize Condition="'$(Configuration)'=='Release'">true</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Ethereum signing (EIP-712) -->
+    <PackageReference Include="Nethereum.Signer" Version="4.21.0" />
+    <PackageReference Include="Nethereum.Util" Version="4.21.0" />
+
+    <!-- Hosting, DI, config, logging -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="7.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="7.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="7.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="7.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="7.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

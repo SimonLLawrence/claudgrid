@@ -1,0 +1,25 @@
+# Build outputs
+bin/
+obj/
+*.user
+
+# Secrets — NEVER commit these
+appsettings.Development.json
+appsettings.Production.json
+appsettings.*.json
+!appsettings.json
+
+# IDE
+.vs/
+.vscode/
+*.suo
+*.sln.docstates
+
+# NuGet
+packages/
+*.nupkg
+project.lock.json
+
+# Logs
+*.log
+logs/
