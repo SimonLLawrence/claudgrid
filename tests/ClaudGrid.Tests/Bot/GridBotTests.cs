@@ -3,6 +3,7 @@ using ClaudGrid.Config;
 using ClaudGrid.Risk;
 using ClaudGrid.Strategy;
 using ClaudGrid.Tests.Mocks;
+using ClaudGrid.Web;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -38,7 +39,7 @@ public sealed class GridBotTests
         var exchange = new MockExchangeClient { MidPrice = 50_000m, TotalEquity = 10_000m };
         var strategy = new GridStrategy(exchange, cfg, NullLogger<GridStrategy>.Instance);
         var risk = new RiskManager(cfg.Risk, NullLogger<RiskManager>.Instance);
-        var bot = new GridBot(exchange, strategy, risk, cfg, NullLogger<GridBot>.Instance);
+        var bot = new GridBot(exchange, strategy, risk, cfg, new BotStatusService(), NullLogger<GridBot>.Instance);
         return (bot, exchange);
     }
 

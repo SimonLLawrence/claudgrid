@@ -1,6 +1,7 @@
 using ClaudGrid.Config;
 using ClaudGrid.Exchange;
 using ClaudGrid.Models;
+using ClaudGrid.Web;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudGrid.Strategy;
@@ -22,6 +23,7 @@ public sealed class GridStrategy
     private readonly ILogger<GridStrategy> _logger;
 
     private List<GridLevel> _levels = new();
+    private readonly List<FillRecord> _pendingFills = new();
     private decimal _initialEquity;
     private bool _isInitialised;
 
@@ -155,6 +157,13 @@ public sealed class GridStrategy
         }
     }
 
+    public IReadOnlyList<FillRecord> DrainNewFills()
+    {
+        var fills = _pendingFills.ToList();
+        _pendingFills.Clear();
+        return fills;
+    }
+
     private async Task HandleFillAsync(GridLevel filledLevel, CancellationToken ct)
     {
         filledLevel.Status = GridLevelStatus.Filled;
@@ -177,6 +186,7 @@ public sealed class GridStrategy
 
                     decimal pnl = (counterPrice.Value - filledLevel.Price) * filledLevel.Size;
                     filledLevel.RealizedPnl += pnl;
+                    _pendingFills.Add(new FillRecord(DateTime.UtcNow, filledLevel.Side.ToString(), filledLevel.Price, filledLevel.Size, pnl));
                     _logger.LogInformation("Counter SELL @ {Price:F2}, expected PnL: {Pnl:F4}",
                         counterPrice.Value, pnl);
                 }
@@ -195,6 +205,7 @@ public sealed class GridStrategy
 
                     decimal pnl = (filledLevel.Price - counterPrice.Value) * filledLevel.Size;
                     filledLevel.RealizedPnl += pnl;
+                    _pendingFills.Add(new FillRecord(DateTime.UtcNow, filledLevel.Side.ToString(), filledLevel.Price, filledLevel.Size, pnl));
                     _logger.LogInformation("Counter BUY @ {Price:F2}, expected PnL: {Pnl:F4}",
                         counterPrice.Value, pnl);
                 }

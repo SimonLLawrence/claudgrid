@@ -1,62 +1,74 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using ClaudGrid.Bot;
 using ClaudGrid.Config;
 using ClaudGrid.Exchange;
 using ClaudGrid.Risk;
 using ClaudGrid.Strategy;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
+using ClaudGrid.Web;
 
 // ── Host setup ────────────────────────────────────────────────────────────────
 
-IHost host = Host.CreateDefaultBuilder(args)
-    .ConfigureAppConfiguration((ctx, cfg) =>
-    {
-        cfg.SetBasePath(AppContext.BaseDirectory)
-           .AddJsonFile("appsettings.json", optional: false)
-           .AddJsonFile($"appsettings.{ctx.HostingEnvironment.EnvironmentName}.json", optional: true)
-           .AddEnvironmentVariables("CLAUDGRID_");
-    })
-    .ConfigureLogging(logging =>
-    {
-        logging.ClearProviders();
-        logging.AddSimpleConsole(opts =>
-        {
-            opts.TimestampFormat = "HH:mm:ss ";
-            opts.SingleLine = true;
-        });
-    })
-    .ConfigureServices((ctx, services) =>
-    {
-        // Config
-        BotConfig botConfig = ctx.Configuration.GetSection(BotConfig.Section).Get<BotConfig>()
-                              ?? throw new InvalidOperationException("Bot config section missing");
+var builder = WebApplication.CreateBuilder(args);
 
-        ValidateConfig(botConfig);
+builder.Configuration.Sources.Clear();
+builder.Configuration
+    .SetBasePath(AppContext.BaseDirectory)
+    .AddJsonFile("appsettings.json", optional: false)
+    .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true)
+    .AddEnvironmentVariables("CLAUDGRID_");
 
-        services.AddSingleton(botConfig);
-        services.AddSingleton(botConfig.Grid);
-        services.AddSingleton(botConfig.Risk);
+builder.Logging.ClearProviders();
+builder.Logging.AddSimpleConsole(opts =>
+{
+    opts.TimestampFormat = "HH:mm:ss ";
+    opts.SingleLine = true;
+});
 
-        // Exchange layer
-        services.AddHttpClient<IExchangeClient, HyperliquidClient>(client =>
-        {
-            client.Timeout = TimeSpan.FromSeconds(10);
-            client.DefaultRequestHeaders.Add("User-Agent", "ClaudGrid/1.0");
-        });
-        services.AddSingleton<HyperliquidSigner>();
+// Config
+BotConfig botConfig = builder.Configuration.GetSection(BotConfig.Section).Get<BotConfig>()
+                      ?? throw new InvalidOperationException("Bot config section missing");
 
-        // Strategy and risk
-        services.AddSingleton<GridStrategy>();
-        services.AddSingleton<RiskManager>();
+ValidateConfig(botConfig);
 
-        // Bot
-        services.AddHostedService<GridBot>();
-    })
-    .Build();
+builder.Services.AddSingleton(botConfig);
+builder.Services.AddSingleton(botConfig.Grid);
+builder.Services.AddSingleton(botConfig.Risk);
 
-await host.RunAsync();
+// Status service
+builder.Services.AddSingleton<BotStatusService>();
+
+// Exchange layer
+builder.Services.AddHttpClient<IExchangeClient, HyperliquidClient>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(10);
+    client.DefaultRequestHeaders.Add("User-Agent", "ClaudGrid/1.0");
+});
+builder.Services.AddSingleton<HyperliquidSigner>();
+
+// Strategy and risk
+builder.Services.AddSingleton<GridStrategy>();
+builder.Services.AddSingleton<RiskManager>();
+
+// Bot
+builder.Services.AddHostedService<GridBot>();
+
+var app = builder.Build();
+
+app.UseStaticFiles();
+
+var jsonOptions = new JsonSerializerOptions
+{
+    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    Converters = { new JsonStringEnumConverter() }
+};
+
+app.MapGet("/api/status", (BotStatusService status) =>
+    Results.Json(status.GetSnapshot(), jsonOptions));
+
+app.MapGet("/", () => Results.Redirect("/index.html"));
+
+await app.RunAsync();
 
 // ── Config validation ─────────────────────────────────────────────────────────
 

@@ -3,6 +3,7 @@ using ClaudGrid.Exchange;
 using ClaudGrid.Models;
 using ClaudGrid.Risk;
 using ClaudGrid.Strategy;
+using ClaudGrid.Web;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -25,6 +26,7 @@ public sealed class GridBot : BackgroundService
     private readonly GridStrategy _strategy;
     private readonly RiskManager _risk;
     private readonly BotConfig _config;
+    private readonly BotStatusService _status;
     private readonly ILogger<GridBot> _logger;
 
     private decimal _gridLower;
@@ -36,12 +38,14 @@ public sealed class GridBot : BackgroundService
         GridStrategy strategy,
         RiskManager risk,
         BotConfig config,
+        BotStatusService status,
         ILogger<GridBot> logger)
     {
         _exchange = exchange;
         _strategy = strategy;
         _risk = risk;
         _config = config;
+        _status = status;
         _logger = logger;
     }
 
@@ -161,6 +165,10 @@ public sealed class GridBot : BackgroundService
                     }
 
                     await _strategy.SyncAsync(ct);
+                    var newFills = _strategy.DrainNewFills();
+                    _status.UpdateFromSync(market.MidPrice, account.TotalEquity,
+                        account.AvailableBalance, _strategy.RealizedPnl,
+                        _syncCount, _strategy.Levels, newFills);
                     LogPnlSummary(account);
                     break;
             }
