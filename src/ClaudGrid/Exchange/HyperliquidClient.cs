@@ -347,9 +347,16 @@ public sealed class HyperliquidClient : IExchangeClient
 
     private static void WriteMsgPackLong(BinaryWriter w, long value)
     {
-        if (value >= int.MinValue && value <= int.MaxValue)
-        { WriteMsgPackInt(w, (int)value); return; }
-        w.Write((byte)0xD3); WriteInt64BE(w, value);
+        if (value >= 0)
+        {
+            // Use the most compact unsigned representation — matches Python msgpack.packb behaviour.
+            if (value <= int.MaxValue) { WriteMsgPackInt(w, (int)value); return; }      // 0xCE or smaller
+            if (value <= 0xFFFFFFFFL) { w.Write((byte)0xCE); WriteUInt32BE(w, (uint)value); return; } // uint32
+            w.Write((byte)0xCF); WriteInt64BE(w, value); return;                                       // uint64
+        }
+        // Negative values
+        if (value >= int.MinValue) { WriteMsgPackInt(w, (int)value); return; }
+        w.Write((byte)0xD3); WriteInt64BE(w, value); // int64
     }
 
     private static void WriteMsgPackStr(BinaryWriter w, string value)
