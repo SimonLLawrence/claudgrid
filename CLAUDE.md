@@ -1,5 +1,7 @@
 # ClaudGrid — Hyperliquid BTC/USD Grid Trading Bot
 
+**Repository:** https://github.com/SimonLLawrence/claudgrid
+
 ## Overview
 
 ClaudGrid is a C# .NET 8 automated grid trading bot that operates on the [Hyperliquid](https://hyperliquid.xyz) perpetual DEX. It trades the **BTC/USD** (BTC-PERP) pair using a symmetric grid strategy designed to target **≥ 5% annual return** on allocated capital with low directional risk.
