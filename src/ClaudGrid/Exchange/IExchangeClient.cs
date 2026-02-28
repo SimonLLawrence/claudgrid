@@ -33,4 +33,15 @@ public interface IExchangeClient
 
     /// <summary>Cancels all open orders for the given asset. Returns the number cancelled.</summary>
     Task<int> CancelAllOrdersAsync(int assetIndex, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the 0-based asset index for the given symbol by querying the /info meta endpoint.
+    /// </summary>
+    Task<int> GetAssetIndexAsync(string symbol, CancellationToken ct = default);
+
+    /// <summary>Returns the USDC spot balance for the configured wallet.</summary>
+    Task<decimal> GetSpotUsdcBalanceAsync(CancellationToken ct = default);
+
+    /// <summary>Transfers USDC from the spot wallet into the perps (cross-margin) account.</summary>
+    Task TransferSpotToPerpsAsync(decimal amount, CancellationToken ct = default);
 }

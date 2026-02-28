@@ -38,7 +38,7 @@ public static class GridCalculator
         {
             int stepsFromMid = i - midIndex;
             decimal price = midPrice * (decimal)Math.Pow((double)(1 + spacing), stepsFromMid);
-            price = RoundToTickSize(price);
+            price = RoundToTickSize(price, cfg.TickSize);
 
             GridLevelSide side = i < midIndex ? GridLevelSide.Buy : GridLevelSide.Sell;
 
@@ -96,7 +96,7 @@ public static class GridCalculator
         decimal lower = midPrice * (decimal)Math.Pow((double)(1 + spacing), -midIndex);
         decimal upper = midPrice * (decimal)Math.Pow((double)(1 + spacing), maxSteps);
 
-        return (RoundToTickSize(lower), RoundToTickSize(upper));
+        return (RoundToTickSize(lower, cfg.TickSize), RoundToTickSize(upper, cfg.TickSize));
     }
 
     /// <summary>

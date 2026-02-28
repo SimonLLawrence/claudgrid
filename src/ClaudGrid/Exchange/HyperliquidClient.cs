@@ -157,6 +157,8 @@ public sealed class HyperliquidClient : IExchangeClient
             ["grouping"] = "na"
         };
 
+        // L1 actions (orders) are signed via phantom-agent EIP-712.
+        // The action dict itself contains only {type, orders, grouping} — no extra metadata.
         byte[] msgPack = MsgPackEncode(action);
         var (r, s, v) = _signer.SignAction(msgPack, nonce);
 
@@ -177,6 +179,7 @@ public sealed class HyperliquidClient : IExchangeClient
             }
         };
 
+        // L1 cancel — no metadata in action dict.
         byte[] msgPack = MsgPackEncode(action);
         var (r, s, v) = _signer.SignAction(msgPack, nonce);
         string json = await PostExchangeAsync(action, nonce, r, s, v, ct);
@@ -196,6 +199,52 @@ public sealed class HyperliquidClient : IExchangeClient
                 cancelled++;
         }
         return cancelled;
+    }
+
+    public async Task<int> GetAssetIndexAsync(string symbol, CancellationToken ct = default)
+    {
+        string json = await PostInfoAsync(new { type = "meta" }, ct);
+        var node = JsonNode.Parse(json);
+        var universe = node?["universe"]?.AsArray();
+        if (universe != null)
+        {
+            for (int i = 0; i < universe.Count; i++)
+            {
+                if (universe[i]?["name"]?.GetValue<string>() == symbol)
+                    return i;
+            }
+        }
+        throw new InvalidOperationException($"Symbol '{symbol}' not found in Hyperliquid meta");
+    }
+
+    public async Task<decimal> GetSpotUsdcBalanceAsync(CancellationToken ct = default)
+    {
+        string json = await PostInfoAsync(new { type = "spotClearinghouseState", user = _config.WalletAddress }, ct);
+        var node = JsonNode.Parse(json);
+        foreach (var balance in node?["balances"]?.AsArray() ?? new System.Text.Json.Nodes.JsonArray())
+        {
+            if (balance?["coin"]?.GetValue<string>() == "USDC")
+                return ParseDecimal(balance["total"]);
+        }
+        return 0m;
+    }
+
+    public async Task TransferSpotToPerpsAsync(decimal amount, CancellationToken ct = default)
+    {
+        long nonce = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var action = new Dictionary<string, object>
+        {
+            ["type"] = "usdClassTransfer",
+            ["amount"] = FloatToWire(amount),
+            ["toPerp"] = true
+        };
+
+        AppendActionMetadata(action, nonce);
+        byte[] msgPack = MsgPackEncode(action);
+        var (r, s, v) = _signer.SignAction(msgPack, nonce);
+        string response = await PostExchangeAsync(action, nonce, r, s, v, ct);
+        _logger.LogInformation("Spot→Perps transfer response: {Response}", response);
     }
 
     // ── HTTP helpers ──────────────────────────────────────────────────────────
@@ -218,7 +267,9 @@ public sealed class HyperliquidClient : IExchangeClient
         {
             action,
             nonce,
-            signature = new { r, s, v }
+            signature = new { r, s, v },
+            vaultAddress = (string?)null,
+            expiresAfter = (long?)null
         };
         string body = JsonSerializer.Serialize(request);
         _logger.LogDebug("POST /exchange: {Body}", body);
@@ -232,6 +283,19 @@ public sealed class HyperliquidClient : IExchangeClient
 
         _logger.LogDebug("Exchange response: {Response}", responseStr);
         return responseStr;
+    }
+
+    /// <summary>
+    /// Appends the nonce, signatureChainId, and hyperliquidChain fields that the
+    /// Hyperliquid API requires on every action before it is msgpack-encoded and signed.
+    /// Mirrors the Python SDK's _post_with_nonce_and_sig helper.
+    /// </summary>
+    private void AppendActionMetadata(Dictionary<string, object> action, long nonce)
+    {
+        int chainId = _config.IsMainnet ? 42161 : 421614;
+        action["nonce"] = nonce;
+        action["signatureChainId"] = "0x" + chainId.ToString("x");
+        action["hyperliquidChain"] = _config.IsMainnet ? "Mainnet" : "Testnet";
     }
 
     // ── MsgPack encoding ──────────────────────────────────────────────────────

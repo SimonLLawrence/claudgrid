@@ -6,14 +6,14 @@ using Nethereum.Util;
 namespace ClaudGrid.Exchange;
 
 /// <summary>
-/// Signs Hyperliquid L1 actions using the EIP-712 phantom-agent scheme.
+/// Signs Hyperliquid actions using two different EIP-712 schemes:
 ///
-/// Signing flow (from the Hyperliquid SDK):
-///   1. MsgPack-encode the action dict.
-///   2. Append nonce (big-endian uint64) + vault flag byte.
-///   3. Keccak256 → connectionId (bytes32).
-///   4. Build EIP-712 typed data: Agent { source, connectionId }.
-///   5. Sign and return (r, s, v).
+/// 1. L1 actions (orders, cancels): "Exchange" domain, phantom Agent struct.
+///    Flow: msgpack(action) + nonce_BE + vault_flag → keccak256 → connectionId
+///          → EIP-712 Agent { source, connectionId }
+///
+/// 2. User-signed actions (usdClassTransfer, withdraw, etc.): "HyperliquidSignTransaction"
+///    domain, human-readable typed structs signed directly.
 ///
 /// Reference: https://github.com/hyperliquid-dex/hyperliquid-ts-sdk
 /// </summary>
@@ -23,8 +23,9 @@ public sealed class HyperliquidSigner
     private readonly bool _isMainnet;
 
     // Chain IDs per Hyperliquid docs
-    private const int MainnetChainId = 42161;   // Arbitrum One
-    private const int TestnetChainId = 421614;  // Arbitrum Sepolia
+    private const int L1ExchangeChainId = 1337;  // Used in the L1 "Exchange" phantom-agent domain (all networks)
+    private const int MainnetChainId = 42161;    // Arbitrum One  — used for user-signed "HyperliquidSignTransaction" domain
+    private const int TestnetChainId = 421614;   // Arbitrum Sepolia — same
 
     public HyperliquidSigner(BotConfig config)
     {
@@ -44,6 +45,58 @@ public sealed class HyperliquidSigner
         string s = "0x" + BitConverter.ToString(signature.S).Replace("-", "").ToLower();
         int v = signature.V[0];
 
+        return (r, s, v);
+    }
+
+    /// <summary>
+    /// Signs a usdClassTransfer using the "HyperliquidSignTransaction" EIP-712 domain.
+    /// This is the "user-signed action" pattern used by the TypeScript SDK.
+    ///
+    /// Signed message: HyperliquidTransaction:UsdClassTransfer {
+    ///   hyperliquidChain: "Mainnet" | "Testnet",
+    ///   destination: "USDC",
+    ///   amount: string,
+    ///   time: uint64
+    /// }
+    /// </summary>
+    public (string r, string s, int v) SignUsdClassTransfer(string amount, long timestamp)
+    {
+        int chainId = _isMainnet ? MainnetChainId : TestnetChainId;
+        string chain = _isMainnet ? "Mainnet" : "Testnet";
+
+        // Domain: HyperliquidSignTransaction
+        byte[] domainTypeHash = Keccak256Utf8(
+            "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+        byte[] domainHash = Keccak256(AbiEncode(
+            domainTypeHash,
+            Keccak256Utf8("HyperliquidSignTransaction"),
+            Keccak256Utf8("1"),
+            PadUint256(chainId),
+            PadAddress("0x0000000000000000000000000000000000000000")
+        ));
+
+        // Struct: HyperliquidTransaction:UsdClassTransfer(string hyperliquidChain,string destination,string amount,uint64 time)
+        byte[] structTypeHash = Keccak256Utf8(
+            "HyperliquidTransaction:UsdClassTransfer(string hyperliquidChain,string destination,string amount,uint64 time)");
+        byte[] structHash = Keccak256(AbiEncode(
+            structTypeHash,
+            Keccak256Utf8(chain),
+            Keccak256Utf8("USDC"),
+            Keccak256Utf8(amount),
+            PadUint256(timestamp)
+        ));
+
+        byte[] final = new byte[2 + 32 + 32];
+        final[0] = 0x19;
+        final[1] = 0x01;
+        Buffer.BlockCopy(domainHash, 0, final, 2, 32);
+        Buffer.BlockCopy(structHash, 0, final, 34, 32);
+
+        var signature = _key.SignAndCalculateV(Sha3Keccack.Current.CalculateHash(final));
+
+        string r = "0x" + BitConverter.ToString(signature.R).Replace("-", "").ToLower();
+        string s = "0x" + BitConverter.ToString(signature.S).Replace("-", "").ToLower();
+        int v = signature.V[0];
         return (r, s, v);
     }
 
@@ -80,7 +133,8 @@ public sealed class HyperliquidSigner
 
     private byte[] ComputeEip712Hash(byte[] connectionId)
     {
-        int chainId = _isMainnet ? MainnetChainId : TestnetChainId;
+        // The L1 "Exchange" domain always uses chainId 1337 regardless of mainnet/testnet.
+        // The actual Arbitrum chain IDs (42161 / 421614) are only used for user-signed actions.
         string source = _isMainnet ? "a" : "b";
 
         // --- Domain separator ---
@@ -91,7 +145,7 @@ public sealed class HyperliquidSigner
             domainTypeHash,
             Keccak256Utf8("Exchange"),
             Keccak256Utf8("1"),
-            PadUint256(chainId),
+            PadUint256(L1ExchangeChainId),
             PadAddress("0x0000000000000000000000000000000000000000")
         ));
 

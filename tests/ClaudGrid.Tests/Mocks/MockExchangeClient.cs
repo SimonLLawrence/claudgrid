@@ -98,6 +98,15 @@ public sealed class MockExchangeClient : IExchangeClient
 
     // ── Helpers for test scenarios ───────────────────────────────────────────
 
+    public Task<int> GetAssetIndexAsync(string symbol, CancellationToken ct = default) =>
+        Task.FromResult(0);
+
+    public Task<decimal> GetSpotUsdcBalanceAsync(CancellationToken ct = default) =>
+        Task.FromResult(0m);
+
+    public Task TransferSpotToPerpsAsync(decimal amount, CancellationToken ct = default) =>
+        Task.CompletedTask;
+
     /// <summary>Simulates an order being filled by removing it from the open orders list.</summary>
     public void SimulateFill(long orderId)
     {

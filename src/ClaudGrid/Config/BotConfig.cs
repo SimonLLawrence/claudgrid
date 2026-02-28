@@ -20,10 +20,13 @@ public sealed class GridConfig
     public string Symbol { get; set; } = "BTC";
 
     /// <summary>
-    /// Hyperliquid asset index (0-based). BTC-PERP is 0 on mainnet.
-    /// Verify via GET /info?type=meta before going live.
+    /// Hyperliquid asset index (0-based). Auto-discovered from /info?type=meta on startup.
+    /// Override here if auto-discovery fails.
     /// </summary>
     public int AssetIndex { get; set; } = 0;
+
+    /// <summary>Minimum price increment for this asset (e.g. 1.0 for BTC, 0.01 for ETH).</summary>
+    public decimal TickSize { get; set; } = 1.0m;
 
     /// <summary>Total number of grid levels (split evenly above/below mid).</summary>
     public int GridLevels { get; set; } = 20;
