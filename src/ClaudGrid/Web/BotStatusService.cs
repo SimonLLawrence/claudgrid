@@ -17,6 +17,7 @@ public sealed class BotSnapshot
     public decimal RealizedPnl { get; set; }
     public int ActiveOrders { get; set; }
     public int FilledLevels { get; set; }
+    public int TotalFills { get; set; }
     public List<GridLevelDto> Levels { get; set; } = new();
     public List<FillRecord> RecentFills { get; set; } = new();
     public List<PricePoint> PriceHistory { get; set; } = new();
@@ -29,6 +30,7 @@ public sealed class BotStatusService
     private readonly Queue<PricePoint> _priceHistory = new();
     private readonly Queue<PnlPoint> _pnlHistory = new();
     private readonly Queue<FillRecord> _recentFills = new();
+    private int _totalFills;
     private BotSnapshot _snapshot = new();
 
     private const int MaxHistory = 120;
@@ -52,6 +54,7 @@ public sealed class BotStatusService
             {
                 _recentFills.Enqueue(f);
                 if (_recentFills.Count > MaxFills) _recentFills.Dequeue();
+                _totalFills++;
             }
 
             _snapshot = new BotSnapshot
@@ -64,6 +67,7 @@ public sealed class BotStatusService
                 RealizedPnl = pnl,
                 ActiveOrders = levels.Count(l => l.Status == GridLevelStatus.Active),
                 FilledLevels = levels.Count(l => l.Status == GridLevelStatus.Filled),
+                TotalFills = _totalFills,
                 Levels = levels.Select(l => new GridLevelDto(
                     l.Index, l.Side.ToString(), l.Price, l.Size,
                     l.Status.ToString(), l.RealizedPnl)).ToList(),
