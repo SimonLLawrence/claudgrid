@@ -186,6 +186,7 @@ public sealed class GridStrategy
             if (counterPrice.HasValue)
             {
                 GridLevel counterLevel = _levels[filledLevel.Index + 1];
+                counterLevel.Side = GridLevelSide.Sell; // always sell as counter to a buy fill
                 if (counterLevel.Status != GridLevelStatus.Active)
                 {
                     counterLevel.Status = GridLevelStatus.Pending;
@@ -201,6 +202,7 @@ public sealed class GridStrategy
             if (counterPrice.HasValue)
             {
                 GridLevel counterLevel = _levels[filledLevel.Index - 1];
+                counterLevel.Side = GridLevelSide.Buy; // always buy as counter to a sell fill
                 if (counterLevel.Status != GridLevelStatus.Active)
                 {
                     counterLevel.Status = GridLevelStatus.Pending;
