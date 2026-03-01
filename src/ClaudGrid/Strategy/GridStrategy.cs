@@ -54,6 +54,11 @@ public sealed class GridStrategy
         if (cancelled > 0)
             _logger.LogInformation("Cancelled {Count} stale orders", cancelled);
 
+        // Close any open position left from a previous session
+        int closed = await _exchange.CloseAllPositionsAsync(_config.Grid.Symbol, _config.Grid.AssetIndex, ct);
+        if (closed > 0)
+            _logger.LogInformation("Closed {Count} stale position(s) — starting flat", closed);
+
         MarketData market = await _exchange.GetMarketDataAsync(_config.Grid.Symbol, ct);
         _logger.LogInformation("Grid anchor price: {Price:F2}", market.MidPrice);
 

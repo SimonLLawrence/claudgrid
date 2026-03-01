@@ -201,6 +201,50 @@ public sealed class HyperliquidClient : IExchangeClient
         return cancelled;
     }
 
+    public async Task<int> CloseAllPositionsAsync(string symbol, int assetIndex, CancellationToken ct = default)
+    {
+        var account = await GetAccountStateAsync(ct);
+        var position = account.Positions.FirstOrDefault(p => p.Symbol == symbol);
+        if (position == null || position.Size == 0) return 0;
+
+        var market = await GetMarketDataAsync(symbol, ct);
+        decimal size = Math.Abs(position.Size);
+        bool isBuy = position.Size < 0; // short → close with buy; long → close with sell
+        decimal slippage = 0.02m;
+        decimal price = isBuy ? market.MidPrice * (1 + slippage) : market.MidPrice * (1 - slippage);
+        // Round to tick size (0.1 for BTC perp)
+        price = Math.Round(price / 0.1m, MidpointRounding.AwayFromZero) * 0.1m;
+
+        long nonce = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var orderWire = new Dictionary<string, object>
+        {
+            ["a"] = assetIndex,
+            ["b"] = isBuy,
+            ["p"] = FloatToWire(price),
+            ["s"] = FloatToWire(size),
+            ["r"] = true, // reduceOnly
+            ["t"] = new Dictionary<string, object>
+            {
+                ["limit"] = new Dictionary<string, object> { ["tif"] = "Ioc" }
+            }
+        };
+
+        var action = new Dictionary<string, object>
+        {
+            ["type"] = "order",
+            ["orders"] = new List<object> { orderWire },
+            ["grouping"] = "na"
+        };
+
+        byte[] msgPack = MsgPackEncode(action);
+        var (r, s, v) = _signer.SignAction(msgPack, nonce);
+        await PostExchangeAsync(action, nonce, r, s, v, ct);
+
+        _logger.LogInformation("Closed stale position: {Side} {Size} {Symbol} @ {Price:F2}",
+            isBuy ? "Buy" : "Sell", size, symbol, price);
+        return 1;
+    }
+
     public async Task<int> GetAssetIndexAsync(string symbol, CancellationToken ct = default)
     {
         string json = await PostInfoAsync(new { type = "meta" }, ct);

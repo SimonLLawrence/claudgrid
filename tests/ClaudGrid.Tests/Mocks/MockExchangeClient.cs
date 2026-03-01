@@ -98,6 +98,9 @@ public sealed class MockExchangeClient : IExchangeClient
 
     // ── Helpers for test scenarios ───────────────────────────────────────────
 
+    public Task<int> CloseAllPositionsAsync(string symbol, int assetIndex, CancellationToken ct = default) =>
+        Task.FromResult(0);
+
     public Task<int> GetAssetIndexAsync(string symbol, CancellationToken ct = default) =>
         Task.FromResult(0);
 

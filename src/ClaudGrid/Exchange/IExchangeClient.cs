@@ -35,6 +35,12 @@ public interface IExchangeClient
     Task<int> CancelAllOrdersAsync(int assetIndex, CancellationToken ct = default);
 
     /// <summary>
+    /// Closes any open position for the given symbol using a reduce-only IOC order
+    /// at 2% slippage from mid. Returns the number of positions closed (0 or 1).
+    /// </summary>
+    Task<int> CloseAllPositionsAsync(string symbol, int assetIndex, CancellationToken ct = default);
+
+    /// <summary>
     /// Returns the 0-based asset index for the given symbol by querying the /info meta endpoint.
     /// </summary>
     Task<int> GetAssetIndexAsync(string symbol, CancellationToken ct = default);
