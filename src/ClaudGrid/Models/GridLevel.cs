@@ -31,7 +31,15 @@ public sealed class GridLevel
     public DateTime? FilledAt { get; set; }
     public decimal? FillPrice { get; set; }
 
-    /// <summary>Running profit accumulated at this level (filled sell price − buy price).</summary>
+    /// <summary>
+    /// Price of the paired order that opened this round-trip leg.
+    /// Set on the counter level when placing a counter-order so that when
+    /// this level fills it knows the entry price of the opposite side.
+    /// Zero means no paired entry — PnL cannot be realised yet.
+    /// </summary>
+    public decimal PairedPrice { get; set; }
+
+    /// <summary>Running profit accumulated at this level (realised on round-trip close).</summary>
     public decimal RealizedPnl { get; set; }
 
     public override string ToString() =>

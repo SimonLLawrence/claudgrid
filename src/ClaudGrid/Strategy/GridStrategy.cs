@@ -182,11 +182,22 @@ public sealed class GridStrategy
 
         if (filledLevel.Side == GridLevelSide.Buy)
         {
+            // Realise PnL only if this buy closes a prior sell (PairedPrice = that sell price).
+            if (filledLevel.PairedPrice > 0)
+            {
+                fillPnl = (filledLevel.PairedPrice - filledLevel.Price) * filledLevel.Size;
+                filledLevel.RealizedPnl += fillPnl;
+                _logger.LogInformation(
+                    "Round-trip closed (sell {Sell:F2} → buy {Buy:F2}), Realized PnL: {Pnl:F4}",
+                    filledLevel.PairedPrice, filledLevel.Price, fillPnl);
+            }
+
             decimal? counterPrice = GridCalculator.CounterSellPrice(filledLevel.Index, _levels);
             if (counterPrice.HasValue)
             {
                 GridLevel counterLevel = _levels[filledLevel.Index + 1];
-                counterLevel.Side = GridLevelSide.Sell; // always sell as counter to a buy fill
+                counterLevel.Side = GridLevelSide.Sell;
+                counterLevel.PairedPrice = filledLevel.Price; // counter sell will close this buy
                 if (counterLevel.Status != GridLevelStatus.Active)
                 {
                     counterLevel.Status = GridLevelStatus.Pending;
@@ -194,25 +205,31 @@ public sealed class GridStrategy
                     _logger.LogInformation("Counter SELL @ {Price:F2}", counterPrice.Value);
                 }
             }
-            // PnL not realised until the counter sell fills.
         }
         else // Sell filled
         {
+            // Realise PnL only if this sell closes a prior buy (PairedPrice = that buy price).
+            if (filledLevel.PairedPrice > 0)
+            {
+                fillPnl = (filledLevel.Price - filledLevel.PairedPrice) * filledLevel.Size;
+                filledLevel.RealizedPnl += fillPnl;
+                _logger.LogInformation(
+                    "Round-trip closed (buy {Buy:F2} → sell {Sell:F2}), Realized PnL: {Pnl:F4}",
+                    filledLevel.PairedPrice, filledLevel.Price, fillPnl);
+            }
+
             decimal? counterPrice = GridCalculator.CounterBuyPrice(filledLevel.Index, _levels);
             if (counterPrice.HasValue)
             {
                 GridLevel counterLevel = _levels[filledLevel.Index - 1];
-                counterLevel.Side = GridLevelSide.Buy; // always buy as counter to a sell fill
+                counterLevel.Side = GridLevelSide.Buy;
+                counterLevel.PairedPrice = filledLevel.Price; // counter buy will close this sell
                 if (counterLevel.Status != GridLevelStatus.Active)
                 {
                     counterLevel.Status = GridLevelStatus.Pending;
                     await TryPlaceOrderAsync(counterLevel, ct);
                 }
-                // Sell closes the round-trip — profit realised here.
-                fillPnl = (filledLevel.Price - counterPrice.Value) * filledLevel.Size;
-                filledLevel.RealizedPnl += fillPnl;
-                _logger.LogInformation("Counter BUY @ {Price:F2}, Realized PnL: {Pnl:F4}",
-                    counterPrice.Value, fillPnl);
+                _logger.LogInformation("Counter BUY @ {Price:F2}", counterPrice.Value);
             }
         }
 
