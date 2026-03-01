@@ -196,10 +196,10 @@ public sealed class GridStrategy
             if (counterPrice.HasValue)
             {
                 GridLevel counterLevel = _levels[filledLevel.Index + 1];
-                counterLevel.Side = GridLevelSide.Sell;
-                counterLevel.PairedPrice = filledLevel.Price; // counter sell will close this buy
                 if (counterLevel.Status != GridLevelStatus.Active)
                 {
+                    counterLevel.Side = GridLevelSide.Sell;
+                    counterLevel.PairedPrice = filledLevel.Price; // counter sell will close this buy
                     counterLevel.Status = GridLevelStatus.Pending;
                     await TryPlaceOrderAsync(counterLevel, ct);
                     _logger.LogInformation("Counter SELL @ {Price:F2}", counterPrice.Value);
@@ -222,14 +222,14 @@ public sealed class GridStrategy
             if (counterPrice.HasValue)
             {
                 GridLevel counterLevel = _levels[filledLevel.Index - 1];
-                counterLevel.Side = GridLevelSide.Buy;
-                counterLevel.PairedPrice = filledLevel.Price; // counter buy will close this sell
                 if (counterLevel.Status != GridLevelStatus.Active)
                 {
+                    counterLevel.Side = GridLevelSide.Buy;
+                    counterLevel.PairedPrice = filledLevel.Price; // counter buy will close this sell
                     counterLevel.Status = GridLevelStatus.Pending;
                     await TryPlaceOrderAsync(counterLevel, ct);
+                    _logger.LogInformation("Counter BUY @ {Price:F2}", counterPrice.Value);
                 }
-                _logger.LogInformation("Counter BUY @ {Price:F2}", counterPrice.Value);
             }
         }
 
