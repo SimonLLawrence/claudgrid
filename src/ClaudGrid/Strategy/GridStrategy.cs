@@ -176,7 +176,10 @@ public sealed class GridStrategy
         _logger.LogInformation("Fill detected: {Side} @ {Price:F2} (level {Index})",
             filledLevel.Side, filledLevel.Price, filledLevel.Index);
 
-        // Place counter-order
+        // Place counter-order and compute realised PnL (sell fills only).
+        // The fill is always recorded regardless of whether a counter-order is placed.
+        decimal fillPnl = 0m;
+
         if (filledLevel.Side == GridLevelSide.Buy)
         {
             decimal? counterPrice = GridCalculator.CounterSellPrice(filledLevel.Index, _levels);
@@ -187,13 +190,10 @@ public sealed class GridStrategy
                 {
                     counterLevel.Status = GridLevelStatus.Pending;
                     await TryPlaceOrderAsync(counterLevel, ct);
-
-                    // PnL is not realised until the counter sell fills; record
-                    // the buy fill as an event only.
-                    _pendingFills.Add(new FillRecord(DateTime.UtcNow, filledLevel.Side.ToString(), filledLevel.Price, filledLevel.Size, 0m));
                     _logger.LogInformation("Counter SELL @ {Price:F2}", counterPrice.Value);
                 }
             }
+            // PnL not realised until the counter sell fills.
         }
         else // Sell filled
         {
@@ -205,15 +205,15 @@ public sealed class GridStrategy
                 {
                     counterLevel.Status = GridLevelStatus.Pending;
                     await TryPlaceOrderAsync(counterLevel, ct);
-
-                    // Sell closes the round-trip — this is where profit is realised.
-                    decimal pnl = (filledLevel.Price - counterPrice.Value) * filledLevel.Size;
-                    filledLevel.RealizedPnl += pnl;
-                    _pendingFills.Add(new FillRecord(DateTime.UtcNow, filledLevel.Side.ToString(), filledLevel.Price, filledLevel.Size, pnl));
-                    _logger.LogInformation("Counter BUY @ {Price:F2}, Realized PnL: {Pnl:F4}",
-                        counterPrice.Value, pnl);
                 }
+                // Sell closes the round-trip — profit realised here.
+                fillPnl = (filledLevel.Price - counterPrice.Value) * filledLevel.Size;
+                filledLevel.RealizedPnl += fillPnl;
+                _logger.LogInformation("Counter BUY @ {Price:F2}, Realized PnL: {Pnl:F4}",
+                    counterPrice.Value, fillPnl);
             }
         }
+
+        _pendingFills.Add(new FillRecord(DateTime.UtcNow, filledLevel.Side.ToString(), filledLevel.Price, filledLevel.Size, fillPnl));
     }
 }
