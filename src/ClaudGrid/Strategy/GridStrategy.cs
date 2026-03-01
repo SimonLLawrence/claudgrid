@@ -81,14 +81,18 @@ public sealed class GridStrategy
         List<Order> liveOrders = await _exchange.GetOpenOrdersAsync(ct);
         HashSet<long> liveIds = liveOrders.Select(o => o.Id).ToHashSet();
 
-        foreach (GridLevel level in _levels)
+        // Snapshot active order IDs before the fill loop. Counter-orders placed
+        // inside HandleFillAsync get new IDs that aren't in liveIds, which would
+        // cause them to be falsely detected as filled in the same pass.
+        var toCheck = _levels
+            .Where(l => l.Status == GridLevelStatus.Active && l.OrderId.HasValue)
+            .Select(l => (Level: l, OrderId: l.OrderId!.Value))
+            .ToList();
+
+        foreach (var (level, orderId) in toCheck)
         {
-            if (level.Status != GridLevelStatus.Active) continue;
-            if (level.OrderId.HasValue && !liveIds.Contains(level.OrderId.Value))
-            {
-                // Order vanished from the book → assume filled
+            if (!liveIds.Contains(orderId))
                 await HandleFillAsync(level, ct);
-            }
         }
 
         // Re-place any pending levels that should now be active
@@ -184,11 +188,10 @@ public sealed class GridStrategy
                     counterLevel.Status = GridLevelStatus.Pending;
                     await TryPlaceOrderAsync(counterLevel, ct);
 
-                    decimal pnl = (counterPrice.Value - filledLevel.Price) * filledLevel.Size;
-                    filledLevel.RealizedPnl += pnl;
-                    _pendingFills.Add(new FillRecord(DateTime.UtcNow, filledLevel.Side.ToString(), filledLevel.Price, filledLevel.Size, pnl));
-                    _logger.LogInformation("Counter SELL @ {Price:F2}, expected PnL: {Pnl:F4}",
-                        counterPrice.Value, pnl);
+                    // PnL is not realised until the counter sell fills; record
+                    // the buy fill as an event only.
+                    _pendingFills.Add(new FillRecord(DateTime.UtcNow, filledLevel.Side.ToString(), filledLevel.Price, filledLevel.Size, 0m));
+                    _logger.LogInformation("Counter SELL @ {Price:F2}", counterPrice.Value);
                 }
             }
         }
@@ -203,10 +206,11 @@ public sealed class GridStrategy
                     counterLevel.Status = GridLevelStatus.Pending;
                     await TryPlaceOrderAsync(counterLevel, ct);
 
+                    // Sell closes the round-trip — this is where profit is realised.
                     decimal pnl = (filledLevel.Price - counterPrice.Value) * filledLevel.Size;
                     filledLevel.RealizedPnl += pnl;
                     _pendingFills.Add(new FillRecord(DateTime.UtcNow, filledLevel.Side.ToString(), filledLevel.Price, filledLevel.Size, pnl));
-                    _logger.LogInformation("Counter BUY @ {Price:F2}, expected PnL: {Pnl:F4}",
+                    _logger.LogInformation("Counter BUY @ {Price:F2}, Realized PnL: {Pnl:F4}",
                         counterPrice.Value, pnl);
                 }
             }
