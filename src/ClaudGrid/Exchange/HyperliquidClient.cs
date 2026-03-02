@@ -255,6 +255,53 @@ public sealed class HyperliquidClient : IExchangeClient
         return 1;
     }
 
+    public async Task<decimal> ClosePartialPositionAsync(string symbol, int assetIndex, OrderSide closeSide, decimal size, CancellationToken ct = default)
+    {
+        var market = await GetMarketDataAsync(symbol, ct);
+        decimal slippage = 0.02m;
+        decimal price = closeSide == OrderSide.Buy
+            ? Math.Round(market.MidPrice * (1 + slippage), 0, MidpointRounding.AwayFromZero)
+            : Math.Round(market.MidPrice * (1 - slippage), 0, MidpointRounding.AwayFromZero);
+
+        long nonce = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var orderWire = new Dictionary<string, object>
+        {
+            ["a"] = assetIndex,
+            ["b"] = closeSide == OrderSide.Buy,
+            ["p"] = FloatToWire(price),
+            ["s"] = FloatToWire(size),
+            ["r"] = true,
+            ["t"] = new Dictionary<string, object>
+            {
+                ["limit"] = new Dictionary<string, object> { ["tif"] = "Ioc" }
+            }
+        };
+
+        var action = new Dictionary<string, object>
+        {
+            ["type"] = "order",
+            ["orders"] = new List<object> { orderWire },
+            ["grouping"] = "na"
+        };
+
+        byte[] msgPack = MsgPackEncode(action);
+        var (r, s, v) = _signer.SignAction(msgPack, nonce);
+        string responseJson = await PostExchangeAsync(action, nonce, r, s, v, ct);
+
+        var node = JsonNode.Parse(responseJson);
+        var status = node?["response"]?["data"]?["statuses"]?[0];
+        string? error = status?["error"]?.GetValue<string>();
+        if (error != null)
+        {
+            _logger.LogWarning("ClosePartialPosition failed: {Error}", error);
+            return 0m;
+        }
+
+        decimal avgPx = ParseDecimal(status?["filled"]?["avgPx"]);
+        _logger.LogInformation("Closed partial position: {Side} {Size} {Symbol} @ {AvgPx:F0} (avg fill)", closeSide, size, symbol, avgPx);
+        return avgPx;
+    }
+
     public async Task<int> GetAssetIndexAsync(string symbol, CancellationToken ct = default)
     {
         string json = await PostInfoAsync(new { type = "meta" }, ct);

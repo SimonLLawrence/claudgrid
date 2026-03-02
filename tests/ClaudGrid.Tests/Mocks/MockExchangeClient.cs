@@ -101,6 +101,9 @@ public sealed class MockExchangeClient : IExchangeClient
     public Task<int> CloseAllPositionsAsync(string symbol, int assetIndex, CancellationToken ct = default) =>
         Task.FromResult(0);
 
+    public Task<decimal> ClosePartialPositionAsync(string symbol, int assetIndex, OrderSide closeSide, decimal size, CancellationToken ct = default) =>
+        Task.FromResult(0m);
+
     public Task<int> GetAssetIndexAsync(string symbol, CancellationToken ct = default) =>
         Task.FromResult(0);
 

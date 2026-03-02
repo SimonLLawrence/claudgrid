@@ -50,4 +50,10 @@ public interface IExchangeClient
 
     /// <summary>Transfers USDC from the spot wallet into the perps (cross-margin) account.</summary>
     Task TransferSpotToPerpsAsync(decimal amount, CancellationToken ct = default);
+
+    /// <summary>
+    /// Places a reduce-only IOC order to close a specific size on the given side.
+    /// Returns the actual average fill price, or 0 if the order was rejected/unfilled.
+    /// </summary>
+    Task<decimal> ClosePartialPositionAsync(string symbol, int assetIndex, OrderSide closeSide, decimal size, CancellationToken ct = default);
 }

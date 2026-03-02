@@ -166,6 +166,61 @@ public sealed class GridStrategy
         }
     }
 
+    /// <summary>
+    /// Manually closes the open position from a single filled level:
+    /// cancels the counter order and places a reduce-only IOC to flatten.
+    /// Resets both levels to Pending so the grid re-places them on the next sync.
+    /// </summary>
+    public async Task<bool> CloseLevelAsync(int index, CancellationToken ct = default)
+    {
+        var level = _levels.FirstOrDefault(l => l.Index == index);
+        if (level == null || level.Status != GridLevelStatus.Filled) return false;
+
+        // Cancel the counter order and reset it so the grid re-places it cleanly
+        int counterIndex = level.Side == GridLevelSide.Buy ? index + 1 : index - 1;
+        if (counterIndex >= 0 && counterIndex < _levels.Count)
+        {
+            var counterLevel = _levels[counterIndex];
+            if (counterLevel.Status == GridLevelStatus.Active && counterLevel.OrderId.HasValue)
+            {
+                await _exchange.CancelOrderAsync(_config.Grid.AssetIndex, counterLevel.OrderId.Value, ct);
+                _logger.LogInformation("Cancelled counter order at level {Index} for manual close", counterIndex);
+            }
+            // Reset whether Active or Pending — clears any stale PairedPrice
+            if (counterLevel.Status == GridLevelStatus.Active || counterLevel.Status == GridLevelStatus.Pending)
+            {
+                counterLevel.Status = GridLevelStatus.Pending;
+                counterLevel.OrderId = null;
+                counterLevel.PairedPrice = 0;
+            }
+        }
+
+        // Close the open position with an opposite-side reduce-only IOC
+        var closeSide = level.Side == GridLevelSide.Buy ? OrderSide.Sell : OrderSide.Buy;
+        decimal actualFillPrice = await _exchange.ClosePartialPositionAsync(
+            _config.Grid.Symbol, _config.Grid.AssetIndex, closeSide, level.Size, ct);
+
+        // Compute and record PnL from the actual fill price
+        decimal fillPnl = 0m;
+        if (actualFillPrice > 0)
+        {
+            fillPnl = level.Side == GridLevelSide.Buy
+                ? (actualFillPrice - level.Price) * level.Size   // bought at level.Price, sold to close
+                : (level.Price - actualFillPrice) * level.Size;  // sold at level.Price, bought to close
+            level.RealizedPnl += fillPnl;
+        }
+
+        _pendingFills.Add(new FillRecord(DateTime.UtcNow, closeSide.ToString(), actualFillPrice, level.Size, fillPnl));
+
+        // Reset the filled level so the grid re-places it
+        level.Status = GridLevelStatus.Pending;
+        level.OrderId = null;
+        level.PairedPrice = 0;
+        level.FilledAt = null;
+        _logger.LogInformation("Manually closed fill pair at level {Index} ({Side} @ {Price:F0}), PnL: {Pnl:F4}", index, level.Side, level.Price, fillPnl);
+        return true;
+    }
+
     public IReadOnlyList<FillRecord> DrainNewFills()
     {
         var fills = _pendingFills.ToList();

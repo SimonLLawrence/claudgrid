@@ -40,7 +40,7 @@
     .badge-stopped  { background: #3d1a1a; color: #f85149; }
     .badge-offline  { background: #2d2d00; color: #d29922; }
 
-    #header-sync { margin-left: auto; font-size: 11px; color: #8b949e; }
+    #header-sync { font-size: 11px; color: #8b949e; }
 
     /* ── Stats strip ── */
     .stats-strip {
@@ -142,6 +142,32 @@
     .side-buy    { color: #3fb950; }
     .side-sell   { color: #f85149; }
 
+    #btn-shutdown {
+      margin-left: auto;
+      background: #1a1a1a;
+      color: #f85149;
+      border: 1px solid #f85149;
+      border-radius: 5px;
+      padding: 4px 14px;
+      font-size: 12px;
+      cursor: pointer;
+      letter-spacing: 0.3px;
+    }
+    #btn-shutdown:hover { background: #3d1a1a; }
+
+    .btn-close {
+      background: #3d1a1a;
+      color: #f85149;
+      border: 1px solid #f85149;
+      border-radius: 4px;
+      padding: 1px 7px;
+      font-size: 11px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .btn-close:hover { background: #5a2020; }
+    .btn-close:disabled { opacity: 0.4; cursor: default; }
+
     /* ── Footer ── */
     footer {
       background: #161b22;
@@ -159,6 +185,7 @@
   <h1>ClaudGrid</h1>
   <span id="status-badge" class="badge-offline">OFFLINE</span>
   <span id="header-sync">—</span>
+  <button id="btn-shutdown" onclick="shutdown()">Shut Down</button>
 </header>
 
 <div class="stats-strip">
@@ -189,7 +216,7 @@
     <div class="table-scroll">
       <table>
         <thead>
-          <tr><th>#</th><th>Side</th><th>Price</th><th>Size</th><th>Status</th><th>PnL</th></tr>
+          <tr><th>#</th><th>Side</th><th>Price</th><th>Size</th><th>Status</th><th>PnL</th><th>Unrealized</th><th></th></tr>
         </thead>
         <tbody id="levels-body">
           <tr class="empty-row"><td colspan="6">Waiting for data…</td></tr>
@@ -269,6 +296,10 @@
     const badge = document.getElementById('status-badge');
     badge.textContent = d.isRunning ? 'RUNNING' : 'STOPPED';
     badge.className = d.isRunning ? 'badge-running' : 'badge-stopped';
+
+    const btn = document.getElementById('btn-shutdown');
+    if (d.isRunning) { btn.disabled = false; btn.textContent = 'Shut Down'; }
+
     setText('header-sync', 'Sync #' + d.syncCount);
 
     setText('s-price',  fmtK(d.midPrice));
@@ -325,22 +356,59 @@
     pnlChart.update('none');
   }
 
+  let _midPrice = 0;
+
+  function unrealizedPnl(level) {
+    if (level.status !== 'Filled') return null;
+    return level.side === 'Buy'
+      ? (_midPrice - level.price) * level.size
+      : (level.price - _midPrice) * level.size;
+  }
+
   function updateLevels(levels) {
     const tbody = document.getElementById('levels-body');
     if (!levels || !levels.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No levels</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No levels</td></tr>';
       return;
     }
     const sorted = [...levels].sort((a, b) => b.price - a.price);
-    tbody.innerHTML = sorted.map(l => `
-      <tr>
+    tbody.innerHTML = sorted.map(l => {
+      const upnl = unrealizedPnl(l);
+      const upnlCell = upnl != null
+        ? `<td class="${pnlCls(upnl)}">${fmt(upnl, 4)}</td>`
+        : `<td style="color:#6e7681">—</td>`;
+      const closeBtn = l.status === 'Filled'
+        ? `<td><button class="btn-close" onclick="closeLevel(${l.index}, this)">Close</button></td>`
+        : `<td></td>`;
+      return `<tr>
         <td>${l.index}</td>
         <td class="${sideCls(l.side)}">${l.side}</td>
         <td>${fmtK(l.price)}</td>
         <td>${fmt(l.size, 4)}</td>
         <td class="${statusCls(l.status)}">${l.status}</td>
         <td class="${pnlCls(l.pnl)}">${fmt(l.pnl, 4)}</td>
-      </tr>`).join('');
+        ${upnlCell}
+        ${closeBtn}
+      </tr>`;
+    }).join('');
+  }
+
+  async function closeLevel(index, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Closing';
+    try {
+      const resp = await fetch('/api/close-level/' + index, { method: 'POST' });
+      if (!resp.ok) {
+        const msg = await resp.text();
+        alert('Close failed: ' + msg);
+        btn.disabled = false;
+        btn.textContent = 'Close';
+      }
+    } catch (e) {
+      alert('Close error: ' + e.message);
+      btn.disabled = false;
+      btn.textContent = 'Close';
+    }
   }
 
   function updateFills(fills) {
@@ -357,6 +425,22 @@
         <td>${fmt(f.size, 4)}</td>
         <td class="${pnlCls(f.pnl)}">${fmt(f.pnl, 4)}</td>
       </tr>`).join('');
+  }
+
+  // ── Shutdown ───────────────────────────────────────────────────────────────
+
+  async function shutdown() {
+    if (!confirm('Shut down the ClaudGrid service?')) return;
+    const btn = document.getElementById('btn-shutdown');
+    btn.disabled = true;
+    btn.textContent = 'Stopping…';
+    try {
+      await fetch('/api/shutdown', { method: 'POST' });
+    } catch (_) { /* server closed the connection — expected */ }
+    btn.textContent = 'Stopped';
+    const badge = document.getElementById('status-badge');
+    badge.textContent = 'STOPPED';
+    badge.className = 'badge-stopped';
   }
 
   // ── Bell sound ─────────────────────────────────────────────────────────────
@@ -390,6 +474,7 @@
 
       if (_lastTotalFills !== null && data.totalFills > _lastTotalFills) playBell();
       _lastTotalFills = data.totalFills;
+      _midPrice = data.midPrice;
 
       updateStats(data);
       updateCharts(data);

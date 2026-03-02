@@ -66,6 +66,18 @@ var jsonOptions = new JsonSerializerOptions
 app.MapGet("/api/status", (BotStatusService status) =>
     Results.Json(status.GetSnapshot(), jsonOptions));
 
+app.MapPost("/api/close-level/{index}", async (int index, GridStrategy strategy) =>
+{
+    bool closed = await strategy.CloseLevelAsync(index);
+    return closed ? Results.Ok() : Results.BadRequest("Level not found or not in Filled state");
+});
+
+app.MapPost("/api/shutdown", (IHostApplicationLifetime lifetime) =>
+{
+    lifetime.StopApplication();
+    return Results.Ok("Shutting down");
+});
+
 app.MapGet("/", () => Results.Redirect("/index.html"));
 
 await app.RunAsync();
