@@ -55,7 +55,11 @@ builder.Services.AddHostedService<GridBot>();
 
 var app = builder.Build();
 
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+        ctx.Context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate"
+});
 
 var jsonOptions = new JsonSerializerOptions
 {
@@ -66,10 +70,13 @@ var jsonOptions = new JsonSerializerOptions
 app.MapGet("/api/status", (BotStatusService status) =>
     Results.Json(status.GetSnapshot(), jsonOptions));
 
-app.MapPost("/api/close-level/{index}", async (int index, GridStrategy strategy) =>
+app.MapPost("/api/close-level/{index}", async (int index, GridStrategy strategy, BotStatusService status) =>
 {
     bool closed = await strategy.CloseLevelAsync(index);
-    return closed ? Results.Ok() : Results.BadRequest("Level not found or not in Filled state");
+    if (!closed) return Results.BadRequest("Level not found or not in Filled state");
+    // Immediately publish the fill so the UI reflects it on the next poll
+    status.AddFills(strategy.DrainNewFills(), strategy.Levels);
+    return Results.Ok();
 });
 
 app.MapPost("/api/shutdown", (IHostApplicationLifetime lifetime) =>

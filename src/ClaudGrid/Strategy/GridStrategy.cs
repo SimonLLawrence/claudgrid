@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using ClaudGrid.Config;
 using ClaudGrid.Exchange;
 using ClaudGrid.Models;
@@ -23,7 +24,7 @@ public sealed class GridStrategy
     private readonly ILogger<GridStrategy> _logger;
 
     private List<GridLevel> _levels = new();
-    private readonly List<FillRecord> _pendingFills = new();
+    private readonly ConcurrentQueue<FillRecord> _pendingFills = new();
     private decimal _initialEquity;
     private bool _isInitialised;
 
@@ -210,7 +211,7 @@ public sealed class GridStrategy
             level.RealizedPnl += fillPnl;
         }
 
-        _pendingFills.Add(new FillRecord(DateTime.UtcNow, closeSide.ToString(), actualFillPrice, level.Size, fillPnl));
+        _pendingFills.Enqueue(new FillRecord(DateTime.UtcNow, closeSide.ToString(), actualFillPrice, level.Size, fillPnl));
 
         // Reset the filled level so the grid re-places it
         level.Status = GridLevelStatus.Pending;
@@ -223,8 +224,8 @@ public sealed class GridStrategy
 
     public IReadOnlyList<FillRecord> DrainNewFills()
     {
-        var fills = _pendingFills.ToList();
-        _pendingFills.Clear();
+        var fills = new List<FillRecord>();
+        while (_pendingFills.TryDequeue(out var f)) fills.Add(f);
         return fills;
     }
 
@@ -305,6 +306,6 @@ public sealed class GridStrategy
             }
         }
 
-        _pendingFills.Add(new FillRecord(DateTime.UtcNow, filledLevel.Side.ToString(), filledLevel.Price, filledLevel.Size, fillPnl));
+        _pendingFills.Enqueue(new FillRecord(DateTime.UtcNow, filledLevel.Side.ToString(), filledLevel.Price, filledLevel.Size, fillPnl));
     }
 }

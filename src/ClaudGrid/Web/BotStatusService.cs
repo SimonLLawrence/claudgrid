@@ -86,6 +86,47 @@ public sealed class BotStatusService
         }
     }
 
+    /// <summary>
+    /// Immediately publishes fills from a manual close without waiting for the next sync cycle.
+    /// Re-uses the most recent snapshot for all non-fill fields.
+    /// </summary>
+    public void AddFills(IEnumerable<FillRecord> fills, IReadOnlyList<GridLevel> levels)
+    {
+        lock (_lock)
+        {
+            bool any = false;
+            foreach (var f in fills)
+            {
+                _recentFills.Enqueue(f);
+                if (_recentFills.Count > MaxFills) _recentFills.Dequeue();
+                _totalFills++;
+                any = true;
+            }
+            if (!any) return;
+
+            var s = _snapshot;
+            _snapshot = new BotSnapshot
+            {
+                IsRunning = s.IsRunning,
+                SyncCount = s.SyncCount,
+                MidPrice = s.MidPrice,
+                TotalEquity = s.TotalEquity,
+                AvailableBalance = s.AvailableBalance,
+                RealizedPnl = levels.Sum(l => l.RealizedPnl),
+                DrawdownPercent = s.DrawdownPercent,
+                ActiveOrders = levels.Count(l => l.Status == GridLevelStatus.Active),
+                FilledLevels = levels.Count(l => l.Status == GridLevelStatus.Filled),
+                TotalFills = _totalFills,
+                Levels = levels.Select(l => new GridLevelDto(
+                    l.Index, l.Side.ToString(), l.Price, l.Size,
+                    l.Status.ToString(), l.RealizedPnl)).ToList(),
+                RecentFills = _recentFills.Reverse().ToList(),
+                PriceHistory = s.PriceHistory,
+                PnlHistory = s.PnlHistory
+            };
+        }
+    }
+
     public BotSnapshot GetSnapshot()
     {
         lock (_lock) return _snapshot;
