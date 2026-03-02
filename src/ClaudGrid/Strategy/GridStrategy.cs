@@ -211,7 +211,7 @@ public sealed class GridStrategy
             level.RealizedPnl += fillPnl;
         }
 
-        _pendingFills.Enqueue(new FillRecord(DateTime.UtcNow, closeSide.ToString(), actualFillPrice, level.Size, fillPnl));
+        _pendingFills.Enqueue(new FillRecord(DateTime.UtcNow, closeSide.ToString(), actualFillPrice, level.Size, fillPnl, true));
 
         // Reset the filled level so the grid re-places it
         level.Status = GridLevelStatus.Pending;
@@ -306,6 +306,6 @@ public sealed class GridStrategy
             }
         }
 
-        _pendingFills.Enqueue(new FillRecord(DateTime.UtcNow, filledLevel.Side.ToString(), filledLevel.Price, filledLevel.Size, fillPnl));
+        _pendingFills.Enqueue(new FillRecord(DateTime.UtcNow, filledLevel.Side.ToString(), filledLevel.Price, filledLevel.Size, fillPnl, filledLevel.PairedPrice > 0));
     }
 }

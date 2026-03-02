@@ -4,7 +4,7 @@ namespace ClaudGrid.Web;
 
 public record PricePoint(DateTime Time, decimal Price);
 public record PnlPoint(DateTime Time, decimal Pnl);
-public record FillRecord(DateTime Time, string Side, decimal Price, decimal Size, decimal Pnl);
+public record FillRecord(DateTime Time, string Side, decimal Price, decimal Size, decimal Pnl, bool IsClose);
 public record GridLevelDto(int Index, string Side, decimal Price, decimal Size, string Status, decimal Pnl);
 
 public sealed class BotSnapshot
