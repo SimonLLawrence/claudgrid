@@ -212,8 +212,8 @@ public sealed class HyperliquidClient : IExchangeClient
         bool isBuy = position.Size < 0; // short → close with buy; long → close with sell
         decimal slippage = 0.02m;
         decimal price = isBuy ? market.MidPrice * (1 + slippage) : market.MidPrice * (1 - slippage);
-        // Round to tick size (0.1 for BTC perp)
-        price = Math.Round(price / 0.1m, MidpointRounding.AwayFromZero) * 0.1m;
+        // Round to tick size (1.0 for BTC perp)
+        price = Math.Round(price, 0, MidpointRounding.AwayFromZero);
 
         long nonce = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var orderWire = new Dictionary<string, object>
@@ -238,7 +238,17 @@ public sealed class HyperliquidClient : IExchangeClient
 
         byte[] msgPack = MsgPackEncode(action);
         var (r, s, v) = _signer.SignAction(msgPack, nonce);
-        await PostExchangeAsync(action, nonce, r, s, v, ct);
+        string responseJson = await PostExchangeAsync(action, nonce, r, s, v, ct);
+
+        // Check for exchange-level errors in the response
+        var node = JsonNode.Parse(responseJson);
+        var status = node?["response"]?["data"]?["statuses"]?[0];
+        string? error = status?["error"]?.GetValue<string>();
+        if (error != null)
+        {
+            _logger.LogWarning("Failed to close position {Symbol}: {Error}", symbol, error);
+            return 0;
+        }
 
         _logger.LogInformation("Closed stale position: {Side} {Size} {Symbol} @ {Price:F2}",
             isBuy ? "Buy" : "Sell", size, symbol, price);

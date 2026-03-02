@@ -15,6 +15,7 @@ public sealed class BotSnapshot
     public decimal TotalEquity { get; set; }
     public decimal AvailableBalance { get; set; }
     public decimal RealizedPnl { get; set; }
+    public decimal DrawdownPercent { get; set; }
     public int ActiveOrders { get; set; }
     public int FilledLevels { get; set; }
     public int TotalFills { get; set; }
@@ -31,6 +32,7 @@ public sealed class BotStatusService
     private readonly Queue<PnlPoint> _pnlHistory = new();
     private readonly Queue<FillRecord> _recentFills = new();
     private int _totalFills;
+    private decimal _peakEquity;
     private BotSnapshot _snapshot = new();
 
     private const int MaxHistory = 120;
@@ -57,6 +59,11 @@ public sealed class BotStatusService
                 _totalFills++;
             }
 
+            if (equity > _peakEquity) _peakEquity = equity;
+            decimal drawdown = _peakEquity > 0
+                ? Math.Max(0m, (_peakEquity - equity) / _peakEquity * 100m)
+                : 0m;
+
             _snapshot = new BotSnapshot
             {
                 IsRunning = true,
@@ -65,6 +72,7 @@ public sealed class BotStatusService
                 TotalEquity = equity,
                 AvailableBalance = available,
                 RealizedPnl = pnl,
+                DrawdownPercent = drawdown,
                 ActiveOrders = levels.Count(l => l.Status == GridLevelStatus.Active),
                 FilledLevels = levels.Count(l => l.Status == GridLevelStatus.Filled),
                 TotalFills = _totalFills,

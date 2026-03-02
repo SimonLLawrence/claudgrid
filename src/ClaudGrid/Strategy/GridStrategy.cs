@@ -209,6 +209,12 @@ public sealed class GridStrategy
                     await TryPlaceOrderAsync(counterLevel, ct);
                     _logger.LogInformation("Counter SELL @ {Price:F2}", counterPrice.Value);
                 }
+                else
+                {
+                    // Order already on the book from initial placement — just record the pairing
+                    // so that when it fills it can compute the correct round-trip PnL.
+                    counterLevel.PairedPrice = filledLevel.Price;
+                }
             }
         }
         else // Sell filled
@@ -234,6 +240,12 @@ public sealed class GridStrategy
                     counterLevel.Status = GridLevelStatus.Pending;
                     await TryPlaceOrderAsync(counterLevel, ct);
                     _logger.LogInformation("Counter BUY @ {Price:F2}", counterPrice.Value);
+                }
+                else
+                {
+                    // Order already on the book from initial placement — just record the pairing
+                    // so that when it fills it can compute the correct round-trip PnL.
+                    counterLevel.PairedPrice = filledLevel.Price;
                 }
             }
         }

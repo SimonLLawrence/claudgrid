@@ -166,6 +166,7 @@
   <div class="stat"><div class="stat-label">Total Equity</div><div class="stat-value" id="s-equity">—</div></div>
   <div class="stat"><div class="stat-label">Available</div><div class="stat-value" id="s-avail">—</div></div>
   <div class="stat"><div class="stat-label">Realized PnL</div><div class="stat-value" id="s-pnl">—</div></div>
+  <div class="stat"><div class="stat-label">Drawdown</div><div class="stat-value" id="s-dd">—</div></div>
   <div class="stat"><div class="stat-label">Active Orders</div><div class="stat-value" id="s-active">—</div></div>
   <div class="stat"><div class="stat-label">Fills</div><div class="stat-value" id="s-fills">—</div></div>
   <div class="stat"><div class="stat-label">Syncs</div><div class="stat-value" id="s-syncs">—</div></div>
@@ -278,6 +279,10 @@
     pnlEl.textContent = fmt(d.realizedPnl, 4) + ' USDC';
     pnlEl.className = 'stat-value ' + pnlCls(d.realizedPnl);
 
+    const ddEl = document.getElementById('s-dd');
+    ddEl.textContent = fmt(d.drawdownPercent, 2) + '%';
+    ddEl.className = 'stat-value ' + (d.drawdownPercent > 0 ? 'neg' : 'pos');
+
     setText('s-active', d.activeOrders);
     setText('s-fills',  d.totalFills);
     setText('s-syncs',  d.syncCount);
@@ -285,8 +290,29 @@
 
   function updateCharts(d) {
     const ph = d.priceHistory || [];
-    priceChart.data.labels = ph.map(p => fmtT(p.time));
+    const labels = ph.map(p => fmtT(p.time));
+    priceChart.data.labels = labels;
     priceChart.data.datasets[0].data = ph.map(p => p.price);
+
+    // Grid level horizontal lines (datasets 1..n)
+    const levels = d.levels || [];
+    priceChart.data.datasets = [priceChart.data.datasets[0]].concat(
+      levels.map(l => {
+        const color = l.status === 'Filled'  ? 'rgba(110,118,129,0.45)'
+                    : l.side   === 'Buy'     ? 'rgba(63,185,80,0.5)'
+                    :                          'rgba(248,81,73,0.5)';
+        return {
+          data: labels.map(() => l.price),
+          borderColor: color,
+          borderWidth: 1,
+          borderDash: [4, 4],
+          fill: false,
+          pointRadius: 0,
+          tension: 0
+        };
+      })
+    );
+
     priceChart.update('none');
 
     const pnh = d.pnlHistory || [];
@@ -333,13 +359,37 @@
       </tr>`).join('');
   }
 
+  // ── Bell sound ─────────────────────────────────────────────────────────────
+
+  let _audioCtx = null;
+  function playBell() {
+    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = _audioCtx;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.4);
+    gain.gain.setValueAtTime(0.4, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.2);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 1.2);
+  }
+
   // ── Polling ────────────────────────────────────────────────────────────────
+
+  let _lastTotalFills = null;
 
   async function poll() {
     try {
       const resp = await fetch('/api/status');
       if (!resp.ok) throw new Error(resp.statusText);
       const data = await resp.json();
+
+      if (_lastTotalFills !== null && data.totalFills > _lastTotalFills) playBell();
+      _lastTotalFills = data.totalFills;
 
       updateStats(data);
       updateCharts(data);
