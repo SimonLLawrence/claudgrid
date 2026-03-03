@@ -546,37 +546,33 @@
 
   let _midPrice = 0;
 
-  function unrealizedPnl(level) {
-    if (!level.netPositionSize || level.netPositionSize === 0) return null;
-    // netPositionSize is signed: positive = long, negative = short
-    // upnl = netPositionSize * (midPrice - entryPrice)
-    return level.netPositionSize * (_midPrice - level.price);
-  }
-
-  function updateLevels(levels) {
+  function updateLevels(levels, netPosition) {
     const tbody = document.getElementById('levels-body');
     if (!levels || !levels.length) {
       tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No levels</td></tr>';
       return;
     }
+    // Only show unrealized PnL and Close button when the exchange actually
+    // has an open position — individual netPositionSize values can be non-zero
+    // even when the total is flat (they cancel each other out).
+    const hasRealPos = Math.abs(netPosition || 0) > 0.00001;
     const sorted = [...levels].sort((a, b) => b.price - a.price);
     tbody.innerHTML = sorted.map(l => {
-      const upnl = unrealizedPnl(l);
+      const upnl = (hasRealPos && l.status === 'Filled')
+        ? l.netPositionSize * (_midPrice - l.price)
+        : null;
       const upnlCell = upnl != null
         ? `<td class="${pnlCls(upnl)}">${fmt(upnl, 4)}</td>`
         : `<td style="color:#6e7681">—</td>`;
-      const closeBtn = l.status === 'Filled'
+      const closeBtn = (l.status === 'Filled' && hasRealPos)
         ? `<td><button class="btn-close" onclick="closeLevel(${l.index}, this)">Close</button></td>`
         : `<td></td>`;
-      const hasOpenPos = l.netPositionSize && l.netPositionSize !== 0;
-      const statusClass = hasOpenPos && l.status !== 'Filled' ? 's-active-pos' : statusCls(l.status);
-      const statusLabel = l.status + (hasOpenPos && l.status !== 'Filled' ? ' ◆' : '');
       return `<tr>
         <td>${l.index}</td>
         <td class="${sideCls(l.side)}">${l.side}</td>
         <td>${fmtK(l.price)}</td>
         <td>${fmt(l.size, 4)}</td>
-        <td class="${statusClass}">${statusLabel}</td>
+        <td class="${statusCls(l.status)}">${l.status}</td>
         <td class="${pnlCls(l.pnl)}">${fmt(l.pnl, 4)}</td>
         ${upnlCell}
         ${closeBtn}
@@ -721,7 +717,7 @@
 
       updateStats(data);
       updateCharts(data);
-      updateLevels(data.levels);
+      updateLevels(data.levels, data.netPosition);
       updateFills(data.recentFills);
       updateMismatches(data.recentMismatches);
 
