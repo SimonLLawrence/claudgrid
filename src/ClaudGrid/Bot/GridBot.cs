@@ -91,18 +91,6 @@ public sealed class GridBot : BackgroundService
 
         // Auto-transfer: if perps balance is zero but spot has USDC, move it across
         AccountState account = await _exchange.GetAccountStateAsync(ct);
-        if (account.TotalEquity == 0m)
-        {
-            decimal spotUsdc = await _exchange.GetSpotUsdcBalanceAsync(ct);
-            if (spotUsdc > 0m)
-            {
-                _logger.LogInformation(
-                    "Perps balance is zero. Transferring {Amount:F2} USDC from spot wallet...", spotUsdc);
-                await _exchange.TransferSpotToPerpsAsync(spotUsdc, ct);
-                await Task.Delay(2000, ct); // brief pause for the transfer to settle
-                account = await _exchange.GetAccountStateAsync(ct);
-            }
-        }
 
         _logger.LogInformation(
             "Account equity: {Equity:F2} USDC, available: {Available:F2} USDC",

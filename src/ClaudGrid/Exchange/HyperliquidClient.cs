@@ -80,6 +80,11 @@ public sealed class HyperliquidClient : IExchangeClient
         decimal equity = ParseDecimal(node["marginSummary"]?["accountValue"]);
         decimal margin = ParseDecimal(node["marginSummary"]?["totalMarginUsed"]);
 
+        // In a unified account spot USDC is shared collateral; include the
+        // free (non-held) portion so equity and drawdown reflect true capital.
+        decimal freeSpot = await GetSpotUsdcBalanceAsync(ct);
+        equity += freeSpot;
+
         var positions = new List<PositionInfo>();
         var assetPositions = node["assetPositions"]?.AsArray() ?? new System.Text.Json.Nodes.JsonArray();
         foreach (var pos in assetPositions)
@@ -325,7 +330,11 @@ public sealed class HyperliquidClient : IExchangeClient
         foreach (var balance in node?["balances"]?.AsArray() ?? new System.Text.Json.Nodes.JsonArray())
         {
             if (balance?["coin"]?.GetValue<string>() == "USDC")
-                return ParseDecimal(balance["total"]);
+            {
+                decimal total = ParseDecimal(balance["total"]);
+                decimal hold  = ParseDecimal(balance["hold"]);
+                return Math.Max(0m, total - hold); // free (non-margined) spot USDC
+            }
         }
         return 0m;
     }
