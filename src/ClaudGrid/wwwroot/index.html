@@ -168,6 +168,85 @@
     .btn-close:hover { background: #5a2020; }
     .btn-close:disabled { opacity: 0.4; cursor: default; }
 
+    /* ── Tab bar ── */
+    .tab-bar {
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      display: flex;
+      flex-shrink: 0;
+      padding: 0 14px;
+    }
+    .tab-btn {
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: #8b949e;
+      cursor: pointer;
+      font-size: 13px;
+      padding: 9px 14px;
+      letter-spacing: 0.2px;
+    }
+    .tab-btn:hover { color: #e6edf3; }
+    .tab-active { color: #e6edf3 !important; border-bottom-color: #58a6ff !important; }
+
+    /* ── Tab panels ── */
+    #tab-dashboard { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    #tab-config    { flex: 1; display: none; flex-direction: column; overflow-y: auto; }
+
+    /* ── Config form ── */
+    .config-body {
+      padding: 28px 32px;
+      display: flex;
+      gap: 40px;
+      flex-wrap: wrap;
+    }
+    .config-section { flex: 1; min-width: 280px; }
+    .config-section h4 {
+      font-size: 11px;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 16px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #21262d;
+    }
+    .config-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px 16px;
+      align-items: center;
+    }
+    .config-grid label { font-size: 13px; color: #c9d1d9; }
+    .config-grid input {
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #e6edf3;
+      font-size: 13px;
+      font-family: inherit;
+      padding: 6px 10px;
+      width: 100%;
+    }
+    .config-grid input:focus { outline: none; border-color: #58a6ff; }
+    .config-actions {
+      padding: 0 32px 28px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    #btn-apply-config {
+      background: #1a4731;
+      color: #3fb950;
+      border: 1px solid #3fb950;
+      border-radius: 6px;
+      padding: 7px 20px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    #btn-apply-config:hover { background: #1f5c3b; }
+    #btn-apply-config:disabled { opacity: 0.5; cursor: default; }
+    #config-msg { font-size: 12px; }
+
     /* ── Footer ── */
     footer {
       background: #161b22;
@@ -199,6 +278,12 @@
   <div class="stat"><div class="stat-label">Syncs</div><div class="stat-value" id="s-syncs">—</div></div>
 </div>
 
+<div class="tab-bar">
+  <button class="tab-btn tab-active" data-tab="dashboard" onclick="showTab('dashboard')">Dashboard</button>
+  <button class="tab-btn" data-tab="config" onclick="showTab('config')">Configuration</button>
+</div>
+
+<div id="tab-dashboard">
 <div class="charts-row">
   <div class="chart-box">
     <div class="chart-title">BTC Price (USDC)</div>
@@ -238,6 +323,42 @@
     </div>
   </div>
 </div>
+</div><!-- #tab-dashboard -->
+
+<div id="tab-config">
+  <div class="config-body">
+    <div class="config-section">
+      <h4>Grid</h4>
+      <div class="config-grid">
+        <label>Levels</label>
+        <input id="cfg-levels" type="number" min="4" step="1" />
+        <label>Spacing (%)</label>
+        <input id="cfg-spacing" type="number" min="0.1" step="0.1" />
+        <label>Order Size (BTC)</label>
+        <input id="cfg-size" type="number" min="0.0001" step="0.0001" />
+        <label>Sync Interval (s)</label>
+        <input id="cfg-sync" type="number" min="5" step="1" />
+      </div>
+    </div>
+    <div class="config-section">
+      <h4>Risk</h4>
+      <div class="config-grid">
+        <label>Max Position (BTC)</label>
+        <input id="cfg-max-pos" type="number" min="0.001" step="0.001" />
+        <label>Max Drawdown (%)</label>
+        <input id="cfg-max-dd" type="number" min="1" max="100" step="0.1" />
+        <label>Min Grid Price ($)</label>
+        <input id="cfg-min-price" type="number" min="1" step="1" />
+        <label>Max Grid Price ($)</label>
+        <input id="cfg-max-price" type="number" min="1" step="1" />
+      </div>
+    </div>
+  </div>
+  <div class="config-actions">
+    <button id="btn-apply-config" onclick="applyConfig()">Apply &amp; Reset Grid</button>
+    <span id="config-msg"></span>
+  </div>
+</div><!-- #tab-config -->
 
 <footer id="footer">Last updated: —</footer>
 
@@ -494,6 +615,72 @@
 
   poll();
   setInterval(poll, 3000);
+
+  // ── Tabs ───────────────────────────────────────────────────────────────────
+
+  function showTab(name) {
+    document.getElementById('tab-dashboard').style.display = name === 'dashboard' ? '' : 'none';
+    document.getElementById('tab-config').style.display    = name === 'config'    ? 'flex' : 'none';
+    document.querySelectorAll('.tab-btn').forEach(b =>
+      b.classList.toggle('tab-active', b.dataset.tab === name));
+    if (name === 'config') loadConfig();
+  }
+
+  // ── Config ─────────────────────────────────────────────────────────────────
+
+  async function loadConfig() {
+    try {
+      const resp = await fetch('/api/config');
+      if (!resp.ok) return;
+      const c = await resp.json();
+      document.getElementById('cfg-levels').value    = c.gridLevels;
+      document.getElementById('cfg-spacing').value   = c.gridSpacingPercent;
+      document.getElementById('cfg-size').value      = c.orderSizeBtc;
+      document.getElementById('cfg-sync').value      = c.syncIntervalSeconds;
+      document.getElementById('cfg-max-pos').value   = c.maxPositionSizeBtc;
+      document.getElementById('cfg-max-dd').value    = c.maxDrawdownPercent;
+      document.getElementById('cfg-min-price').value = c.minGridPrice;
+      document.getElementById('cfg-max-price').value = c.maxGridPrice;
+    } catch (e) { console.error('Config load error:', e); }
+  }
+
+  async function applyConfig() {
+    const btn = document.getElementById('btn-apply-config');
+    const msg = document.getElementById('config-msg');
+    btn.disabled = true;
+    msg.textContent = 'Applying…';
+    msg.style.color = '#8b949e';
+
+    const body = {
+      gridLevels:          parseInt(document.getElementById('cfg-levels').value),
+      gridSpacingPercent:  parseFloat(document.getElementById('cfg-spacing').value),
+      orderSizeBtc:        parseFloat(document.getElementById('cfg-size').value),
+      syncIntervalSeconds: parseInt(document.getElementById('cfg-sync').value),
+      maxPositionSizeBtc:  parseFloat(document.getElementById('cfg-max-pos').value),
+      maxDrawdownPercent:  parseFloat(document.getElementById('cfg-max-dd').value),
+      minGridPrice:        parseFloat(document.getElementById('cfg-min-price').value),
+      maxGridPrice:        parseFloat(document.getElementById('cfg-max-price').value)
+    };
+
+    try {
+      const resp = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (resp.ok) {
+        msg.textContent = 'Applied. Grid reset.';
+        msg.style.color = '#3fb950';
+      } else {
+        msg.textContent = 'Error: ' + (await resp.text());
+        msg.style.color = '#f85149';
+      }
+    } catch (e) {
+      msg.textContent = 'Error: ' + e.message;
+      msg.style.color = '#f85149';
+    }
+    btn.disabled = false;
+  }
 </script>
 </body>
 </html>

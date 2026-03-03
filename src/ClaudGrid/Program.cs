@@ -16,6 +16,7 @@ builder.Configuration
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: false)
     .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true)
+    .AddJsonFile("appsettings.Runtime.json", optional: true)
     .AddEnvironmentVariables("CLAUDGRID_");
 
 builder.Logging.ClearProviders();
@@ -85,11 +86,76 @@ app.MapPost("/api/shutdown", (IHostApplicationLifetime lifetime) =>
     return Results.Ok("Shutting down");
 });
 
+app.MapGet("/api/config", (GridConfig grid, RiskConfig risk) =>
+    Results.Json(new
+    {
+        gridLevels           = grid.GridLevels,
+        gridSpacingPercent   = grid.GridSpacingPercent,
+        orderSizeBtc         = grid.OrderSizeBtc,
+        syncIntervalSeconds  = grid.SyncIntervalSeconds,
+        maxPositionSizeBtc   = risk.MaxPositionSizeBtc,
+        maxDrawdownPercent   = risk.MaxDrawdownPercent,
+        minGridPrice         = risk.MinGridPrice,
+        maxGridPrice         = risk.MaxGridPrice
+    }, jsonOptions));
+
+app.MapPost("/api/config", async (ConfigUpdateRequest req, GridConfig grid, RiskConfig risk, GridStrategy strategy) =>
+{
+    if (req.GridLevels < 4)                                  return Results.BadRequest("GridLevels must be >= 4");
+    if (req.GridSpacingPercent <= 0)                         return Results.BadRequest("GridSpacingPercent must be > 0");
+    if (req.OrderSizeBtc <= 0)                               return Results.BadRequest("OrderSizeBtc must be > 0");
+    if (req.SyncIntervalSeconds < 5)                         return Results.BadRequest("SyncIntervalSeconds must be >= 5");
+    if (req.MaxPositionSizeBtc <= 0)                         return Results.BadRequest("MaxPositionSizeBtc must be > 0");
+    if (req.MaxDrawdownPercent is <= 0 or > 100)             return Results.BadRequest("MaxDrawdownPercent must be 1–100");
+    if (req.MinGridPrice <= 0)                               return Results.BadRequest("MinGridPrice must be > 0");
+    if (req.MaxGridPrice <= req.MinGridPrice)                return Results.BadRequest("MaxGridPrice must be > MinGridPrice");
+
+    grid.GridLevels          = req.GridLevels;
+    grid.GridSpacingPercent  = req.GridSpacingPercent;
+    grid.OrderSizeBtc        = req.OrderSizeBtc;
+    grid.SyncIntervalSeconds = req.SyncIntervalSeconds;
+    risk.MaxPositionSizeBtc  = req.MaxPositionSizeBtc;
+    risk.MaxDrawdownPercent  = req.MaxDrawdownPercent;
+    risk.MinGridPrice        = req.MinGridPrice;
+    risk.MaxGridPrice        = req.MaxGridPrice;
+
+    await PersistRuntimeConfigAsync(grid, risk);
+    await strategy.ResetAsync();
+    return Results.Ok();
+});
+
 app.MapGet("/", () => Results.Redirect("/index.html"));
 
 await app.RunAsync();
 
 // ── Config validation ─────────────────────────────────────────────────────────
+
+static async Task PersistRuntimeConfigAsync(GridConfig grid, RiskConfig risk)
+{
+    var doc = new
+    {
+        Bot = new
+        {
+            Grid = new
+            {
+                grid.GridLevels,
+                grid.GridSpacingPercent,
+                grid.OrderSizeBtc,
+                grid.SyncIntervalSeconds
+            },
+            Risk = new
+            {
+                risk.MaxPositionSizeBtc,
+                risk.MaxDrawdownPercent,
+                risk.MinGridPrice,
+                risk.MaxGridPrice
+            }
+        }
+    };
+    var json = JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true });
+    await File.WriteAllTextAsync(
+        Path.Combine(AppContext.BaseDirectory, "appsettings.Runtime.json"), json);
+}
 
 static void ValidateConfig(BotConfig cfg)
 {
@@ -110,3 +176,15 @@ static void ValidateConfig(BotConfig cfg)
     if (cfg.Grid.OrderSizeBtc <= 0)
         throw new InvalidOperationException("OrderSizeBtc must be > 0.");
 }
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+record ConfigUpdateRequest(
+    int GridLevels,
+    decimal GridSpacingPercent,
+    decimal OrderSizeBtc,
+    int SyncIntervalSeconds,
+    decimal MaxPositionSizeBtc,
+    decimal MaxDrawdownPercent,
+    decimal MinGridPrice,
+    decimal MaxGridPrice);
