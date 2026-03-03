@@ -159,7 +159,7 @@ public sealed class GridBot : BackgroundService
                     var newFills = _strategy.DrainNewFills();
                     _status.UpdateFromSync(market.MidPrice, postSyncAccount.TotalEquity,
                         postSyncAccount.AvailableBalance, _strategy.RealizedPnl,
-                        _syncCount, _strategy.Levels, newFills);
+                        _syncCount, _strategy.Levels, newFills, _strategy.TrackedNetPosition);
                     foreach (var msg in _strategy.DrainMismatches())
                         _status.RecordMismatch(msg);
                     VerifyPositions(postSyncAccount);
@@ -197,7 +197,8 @@ public sealed class GridBot : BackgroundService
 
     private void VerifyPositions(AccountState account)
     {
-        decimal expectedNet = _strategy.Levels.Sum(l => l.NetPositionSize);
+        // Expected position = running sum of all fill events (+buy, −sell)
+        decimal expectedNet = _strategy.TrackedNetPosition;
 
         decimal actualNet = account.Positions
             .Where(p => p.Symbol == _config.Grid.Symbol)

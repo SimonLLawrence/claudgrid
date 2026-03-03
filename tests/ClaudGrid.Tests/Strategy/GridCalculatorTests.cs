@@ -84,10 +84,10 @@ public sealed class GridCalculatorTests
     }
 
     [Fact]
-    public void BuildGrid_AllLevelsStartPending()
+    public void BuildGrid_AllLevelsStartInitial()
     {
         var levels = GridCalculator.BuildGrid(50_000m, DefaultConfig());
-        Assert.All(levels, l => Assert.Equal(GridLevelStatus.Pending, l.Status));
+        Assert.All(levels, l => Assert.Equal(GridLevelStatus.Initial, l.Status));
     }
 
     // ── GetGridBounds ─────────────────────────────────────────────────────────

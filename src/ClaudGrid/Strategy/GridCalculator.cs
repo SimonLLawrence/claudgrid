@@ -21,7 +21,7 @@ public static class GridCalculator
     /// <summary>
     /// Builds all grid levels centred around <paramref name="midPrice"/>.
     /// Levels below mid get BUY orders; levels above get SELL orders.
-    /// The level closest to the current price is left pending (no order placed
+    /// The level closest to the current price is left cancelled (no order placed
     /// immediately; it becomes active once the price moves away).
     /// </summary>
     public static List<GridLevel> BuildGrid(decimal midPrice, GridConfig cfg)
@@ -48,7 +48,7 @@ public static class GridCalculator
                 Price = price,
                 Side = side,
                 Size = cfg.OrderSizeBtc,
-                Status = GridLevelStatus.Pending
+                Status = GridLevelStatus.Initial
             });
         }
         return levels;

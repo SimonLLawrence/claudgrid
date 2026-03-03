@@ -5,7 +5,7 @@ namespace ClaudGrid.Web;
 public record PricePoint(DateTime Time, decimal Price);
 public record PnlPoint(DateTime Time, decimal Pnl);
 public record FillRecord(DateTime Time, string Side, decimal Price, decimal Size, decimal Pnl, bool IsClose);
-public record GridLevelDto(int Index, string Side, decimal Price, decimal Size, string Status, decimal Pnl, decimal NetPositionSize);
+public record GridLevelDto(int Index, string Side, decimal Price, decimal Size, string Status, decimal Pnl, decimal NetPositionSize, bool HasExchangeOrder);
 public record MismatchRecord(DateTime Time, string Message);
 
 public sealed class BotSnapshot
@@ -46,7 +46,7 @@ public sealed class BotStatusService
     public void UpdateFromSync(
         decimal midPrice, decimal equity, decimal available, decimal pnl,
         int syncCount, IReadOnlyList<GridLevel> levels,
-        IEnumerable<FillRecord> newFills)
+        IEnumerable<FillRecord> newFills, decimal trackedNetPosition)
     {
         var now = DateTime.UtcNow;
         lock (_lock)
@@ -78,13 +78,14 @@ public sealed class BotStatusService
                 AvailableBalance = available,
                 RealizedPnl = pnl,
                 DrawdownPercent = drawdown,
-                ActiveOrders = levels.Count(l => l.Status == GridLevelStatus.Active),
+                ActiveOrders = levels.Count(l => l.Status == GridLevelStatus.Active || l.Status == GridLevelStatus.PartialFill),
                 FilledLevels = levels.Count(l => l.Status == GridLevelStatus.Filled),
                 TotalFills = _totalFills,
-                NetPosition = levels.Sum(l => l.NetPositionSize),
+                NetPosition = trackedNetPosition,
                 Levels = levels.Select(l => new GridLevelDto(
                     l.Index, l.Side.ToString(), l.Price, l.Size,
-                    l.Status.ToString(), l.RealizedPnl, l.NetPositionSize)).ToList(),
+                    l.Status.ToString(), l.RealizedPnl, l.NetPositionSize,
+                    l.Status is GridLevelStatus.Active or GridLevelStatus.PartialFill)).ToList(),
                 RecentFills = _recentFills.Reverse().ToList(),
                 PriceHistory = _priceHistory.ToList(),
                 PnlHistory = _pnlHistory.ToList(),
@@ -121,13 +122,14 @@ public sealed class BotStatusService
                 AvailableBalance = s.AvailableBalance,
                 RealizedPnl = levels.Sum(l => l.RealizedPnl),
                 DrawdownPercent = s.DrawdownPercent,
-                ActiveOrders = levels.Count(l => l.Status == GridLevelStatus.Active),
+                ActiveOrders = levels.Count(l => l.Status == GridLevelStatus.Active || l.Status == GridLevelStatus.PartialFill),
                 FilledLevels = levels.Count(l => l.Status == GridLevelStatus.Filled),
                 TotalFills = _totalFills,
                 NetPosition = levels.Sum(l => l.NetPositionSize),
                 Levels = levels.Select(l => new GridLevelDto(
                     l.Index, l.Side.ToString(), l.Price, l.Size,
-                    l.Status.ToString(), l.RealizedPnl, l.NetPositionSize)).ToList(),
+                    l.Status.ToString(), l.RealizedPnl, l.NetPositionSize,
+                    l.Status is GridLevelStatus.Active or GridLevelStatus.PartialFill)).ToList(),
                 RecentFills = _recentFills.Reverse().ToList(),
                 PriceHistory = s.PriceHistory,
                 PnlHistory = s.PnlHistory,

@@ -29,6 +29,9 @@ public sealed class MockExchangeClient : IExchangeClient
     /// <summary>When true, PlaceLimitOrderAsync throws.</summary>
     public bool ThrowOnPlaceOrder { get; set; }
 
+    /// <summary>Price returned by ClosePartialPositionAsync (simulates IOC fill).</summary>
+    public decimal ClosePartialFillPrice { get; set; } = 50_000m;
+
     // ── IExchangeClient ──────────────────────────────────────────────────────
 
     public Task<MarketData> GetMarketDataAsync(string symbol, CancellationToken ct = default)
@@ -102,7 +105,7 @@ public sealed class MockExchangeClient : IExchangeClient
         Task.FromResult(0);
 
     public Task<decimal> ClosePartialPositionAsync(string symbol, int assetIndex, OrderSide closeSide, decimal size, CancellationToken ct = default) =>
-        Task.FromResult(0m);
+        Task.FromResult(ClosePartialFillPrice);
 
     public Task<int> GetAssetIndexAsync(string symbol, CancellationToken ct = default) =>
         Task.FromResult(0);
@@ -124,4 +127,18 @@ public sealed class MockExchangeClient : IExchangeClient
     {
         _openOrders.Clear();
     }
+
+    /// <summary>
+    /// Simulates a partial fill: the order remains open but FilledSize increases.
+    /// SyncAsync will detect this as a PartialFill when FilledSize > level.PartialFilledSize.
+    /// </summary>
+    public void SimulatePartialFill(long orderId, decimal filledSize)
+    {
+        var order = _openOrders.FirstOrDefault(o => o.Id == orderId);
+        if (order != null)
+            order.FilledSize = filledSize;
+    }
+
+    /// <summary>Adds an arbitrary order to the open orders list (simulates an orphaned exchange order).</summary>
+    public void InjectOpenOrder(Order order) => _openOrders.Add(order);
 }

@@ -135,11 +135,10 @@
     }
     .empty-row td { color: #8b949e; text-align: center; padding: 18px; }
 
-    .s-active    { color: #58a6ff; }
-    .s-filled    { color: #3fb950; }
-    .s-pending   { color: #d29922; }
-    .s-cancelled { color: #6e7681; }
-    .s-active-pos { color: #e3b341; }  /* Active but carrying an open position */
+    .s-active      { color: #58a6ff; }
+    .s-filled      { color: #3fb950; }
+    .s-partialfill { color: #d29922; }
+    .s-initial     { color: #6e7681; }
     .side-buy    { color: #3fb950; }
     .side-sell   { color: #f85149; }
 
@@ -326,7 +325,8 @@
   <div class="stat"><div class="stat-label">Available</div><div class="stat-value" id="s-avail">—</div></div>
   <div class="stat"><div class="stat-label">Realized PnL</div><div class="stat-value" id="s-pnl">—</div></div>
   <div class="stat"><div class="stat-label">Drawdown</div><div class="stat-value" id="s-dd">—</div></div>
-  <div class="stat"><div class="stat-label">Active Orders</div><div class="stat-value" id="s-active">—</div></div>
+  <div class="stat"><div class="stat-label">Live Orders</div><div class="stat-value" id="s-active">—</div></div>
+  <div class="stat"><div class="stat-label">Filled Levels</div><div class="stat-value" id="s-filled">—</div></div>
   <div class="stat"><div class="stat-label">Net Position</div><div class="stat-value" id="s-netpos">—</div></div>
   <div class="stat"><div class="stat-label">Fills</div><div class="stat-value" id="s-fills">—</div></div>
   <div class="stat"><div class="stat-label">Syncs</div><div class="stat-value" id="s-syncs">—</div></div>
@@ -355,10 +355,10 @@
     <div class="table-scroll">
       <table>
         <thead>
-          <tr><th>#</th><th>Side</th><th>Price</th><th>Size</th><th>Status</th><th>Realized</th><th>Unrealized</th><th></th></tr>
+          <tr><th>#</th><th>Side</th><th>Price</th><th>Size</th><th>Status</th><th>On Exch?</th><th>Realized</th><th>Unrealized</th><th></th></tr>
         </thead>
         <tbody id="levels-body">
-          <tr class="empty-row"><td colspan="6">Waiting for data…</td></tr>
+          <tr class="empty-row"><td colspan="9">Waiting for data…</td></tr>
         </tbody>
       </table>
     </div>
@@ -497,6 +497,7 @@
     ddEl.className = 'stat-value ' + (d.drawdownPercent > 0 ? 'neg' : 'pos');
 
     setText('s-active', d.activeOrders);
+    setText('s-filled', d.filledLevels);
 
     const npEl = document.getElementById('s-netpos');
     const np = d.netPosition || 0;
@@ -549,7 +550,7 @@
   function updateLevels(levels, netPosition) {
     const tbody = document.getElementById('levels-body');
     if (!levels || !levels.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No levels</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No levels</td></tr>';
       return;
     }
     // Only show unrealized PnL and Close button when the exchange actually
@@ -567,12 +568,16 @@
       const closeBtn = (l.status === 'Filled' && hasRealPos)
         ? `<td><button class="btn-close" onclick="closeLevel(${l.index}, this)">Close</button></td>`
         : `<td></td>`;
+      const exchCell = l.hasExchangeOrder
+        ? `<td style="color:#3fb950">Yes</td>`
+        : `<td style="color:#6e7681">—</td>`;
       return `<tr>
         <td>${l.index}</td>
         <td class="${sideCls(l.side)}">${l.side}</td>
         <td>${fmtK(l.price)}</td>
         <td>${fmt(l.size, 4)}</td>
         <td class="${statusCls(l.status)}">${l.status}</td>
+        ${exchCell}
         <td class="${pnlCls(l.pnl)}">${fmt(l.pnl, 4)}</td>
         ${upnlCell}
         ${closeBtn}

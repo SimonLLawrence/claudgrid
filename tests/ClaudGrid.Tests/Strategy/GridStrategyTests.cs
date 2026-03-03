@@ -97,7 +97,7 @@ public sealed class GridStrategyTests
 
         // Filled levels are immediately re-queued — verify via the fill record instead
         var fills = strategy.DrainNewFills();
-        Assert.Equal(1, fills.Count);
+        Assert.Single(fills);
     }
 
     [Fact]
@@ -117,9 +117,10 @@ public sealed class GridStrategyTests
         exchange.SimulateFill(buyLevel.OrderId.Value);
         await strategy.SyncAsync();
 
-        // A counter sell order + a re-placement buy should have been placed
+        // A counter sell order should have been placed
+        Assert.True(exchange.PlacedOrders.Count > initialOrderCount,
+            "Expected a counter order to be placed after fill");
         var newOrders = exchange.PlacedOrders.Skip(initialOrderCount).ToList();
-        Assert.True(newOrders.Count >= 2, "Expected counter order and re-placement order");
         Assert.Contains(newOrders, o => o.Side == OrderSide.Sell);
     }
 
@@ -155,7 +156,7 @@ public sealed class GridStrategyTests
         await strategy.InitialiseAsync(10_000m);
         Assert.True(strategy.IsInitialised);
         Assert.All(strategy.Levels, l =>
-            Assert.True(l.Status is GridLevelStatus.Pending or GridLevelStatus.Active));
+            Assert.True(l.Status is GridLevelStatus.Initial or GridLevelStatus.Active));
     }
 
     // ── PnL tracking ─────────────────────────────────────────────────────────
@@ -166,5 +167,331 @@ public sealed class GridStrategyTests
         var (strategy, _) = CreateSut();
         await strategy.InitialiseAsync(10_000m);
         Assert.Equal(0m, strategy.RealizedPnl);
+    }
+
+    [Fact]
+    public async Task SyncAsync_RoundTrip_RecordsPositiveRealizedPnl()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        // Fill the first Active Sell → counter Buy placed at index-1
+        GridLevel sell = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Sell);
+        exchange.SimulateFill(sell.OrderId!.Value);
+        await strategy.SyncAsync();
+        strategy.DrainNewFills();
+
+        // Fill that counter Buy → round-trip closes, PnL realised
+        GridLevel counterBuy = strategy.Levels[sell.Index - 1];
+        Assert.Equal(GridLevelSide.Buy, counterBuy.Side);
+        exchange.SimulateFill(counterBuy.OrderId!.Value);
+        await strategy.SyncAsync();
+
+        Assert.True(strategy.RealizedPnl > 0m,
+            $"Expected positive PnL after round-trip, got {strategy.RealizedPnl}");
+    }
+
+    // ── TrackedNetPosition ────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task SyncAsync_BuyFill_TrackedNetPositionIncrements()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel buy = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
+        exchange.SimulateFill(buy.OrderId!.Value);
+        await strategy.SyncAsync();
+
+        Assert.Equal(buy.Size, strategy.TrackedNetPosition);
+    }
+
+    [Fact]
+    public async Task SyncAsync_SellFill_TrackedNetPositionDecrements()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel sell = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Sell);
+        exchange.SimulateFill(sell.OrderId!.Value);
+        await strategy.SyncAsync();
+
+        Assert.Equal(-sell.Size, strategy.TrackedNetPosition);
+    }
+
+    [Fact]
+    public async Task SyncAsync_RoundTrip_TrackedNetPositionReturnsToZero()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel sell = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Sell);
+        exchange.SimulateFill(sell.OrderId!.Value);
+        await strategy.SyncAsync();
+        strategy.DrainNewFills();
+
+        GridLevel counterBuy = strategy.Levels[sell.Index - 1];
+        exchange.SimulateFill(counterBuy.OrderId!.Value);
+        await strategy.SyncAsync();
+
+        Assert.Equal(0m, strategy.TrackedNetPosition);
+    }
+
+    [Fact]
+    public async Task InitialiseAsync_ResetsTrackedNetPosition()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel buy = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
+        exchange.SimulateFill(buy.OrderId!.Value);
+        await strategy.SyncAsync();
+        Assert.NotEqual(0m, strategy.TrackedNetPosition);
+
+        await strategy.InitialiseAsync(10_000m);
+        Assert.Equal(0m, strategy.TrackedNetPosition);
+    }
+
+    // ── Round-trip — per-level NetPositionSize zeroing ────────────────────────
+
+    [Fact]
+    public async Task SyncAsync_RoundTrip_ZerosPerLevelNetPositionSize()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel sell = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Sell);
+        exchange.SimulateFill(sell.OrderId!.Value);
+        await strategy.SyncAsync();
+        strategy.DrainNewFills();
+
+        GridLevel counterBuy = strategy.Levels[sell.Index - 1];
+        exchange.SimulateFill(counterBuy.OrderId!.Value);
+        await strategy.SyncAsync();
+
+        Assert.Equal(0m, sell.NetPositionSize);
+        Assert.Equal(0m, counterBuy.NetPositionSize);
+    }
+
+    // ── DrainNewFills ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task DrainNewFills_AfterBuyFill_HasExpectedRecord()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel buy = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
+        exchange.SimulateFill(buy.OrderId!.Value);
+        await strategy.SyncAsync();
+
+        var fills = strategy.DrainNewFills();
+        var fill = Assert.Single(fills);
+        Assert.Equal("Buy", fill.Side);
+        Assert.Equal(buy.Size, fill.Size);
+        Assert.False(fill.IsClose);
+    }
+
+    [Fact]
+    public async Task DrainNewFills_EmptyAfterDrain()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel buy = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
+        exchange.SimulateFill(buy.OrderId!.Value);
+        await strategy.SyncAsync();
+
+        strategy.DrainNewFills();
+        Assert.Empty(strategy.DrainNewFills());
+    }
+
+    [Fact]
+    public async Task DrainNewFills_RoundTripClose_IsCloseTrueAndPnlPositive()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel sell = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Sell);
+        exchange.SimulateFill(sell.OrderId!.Value);
+        await strategy.SyncAsync();
+        strategy.DrainNewFills();
+
+        GridLevel counterBuy = strategy.Levels[sell.Index - 1];
+        exchange.SimulateFill(counterBuy.OrderId!.Value);
+        await strategy.SyncAsync();
+
+        var fills = strategy.DrainNewFills();
+        var fill = Assert.Single(fills);
+        Assert.True(fill.IsClose, "Round-trip closing fill should have IsClose=true");
+        Assert.True(fill.Pnl > 0m, $"Expected positive PnL, got {fill.Pnl}");
+    }
+
+    // ── DrainMismatches ───────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task SyncAsync_OrphanedExchangeOrder_ReportsMismatch()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        exchange.InjectOpenOrder(new Order
+        {
+            Id = 99999L,
+            Symbol = "BTC",
+            Side = OrderSide.Buy,
+            Price = 50_000m,
+            Size = 0.001m,
+            Status = OrderStatus.Open
+        });
+
+        await strategy.SyncAsync();
+
+        var mismatches = strategy.DrainMismatches();
+        Assert.True(mismatches.Count > 0, "Expected a mismatch for the orphaned order");
+        Assert.Contains(mismatches, m => m.Contains("99999"));
+    }
+
+    [Fact]
+    public async Task DrainMismatches_EmptyAfterDrain()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        exchange.InjectOpenOrder(new Order { Id = 88888L, Symbol = "BTC", Side = OrderSide.Buy, Price = 50_000m, Size = 0.001m, Status = OrderStatus.Open });
+        await strategy.SyncAsync();
+
+        strategy.DrainMismatches();
+        Assert.Empty(strategy.DrainMismatches());
+    }
+
+    // ── Partial fills ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task SyncAsync_PartialFill_StatusBecomesPartialFill()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel buy = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
+        exchange.SimulatePartialFill(buy.OrderId!.Value, buy.Size / 2);
+        await strategy.SyncAsync();
+
+        Assert.Equal(GridLevelStatus.PartialFill, buy.Status);
+    }
+
+    [Fact]
+    public async Task SyncAsync_PartialFill_TrackedNetPositionIncrements()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel buy = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
+        decimal partial = buy.Size / 2;
+        exchange.SimulatePartialFill(buy.OrderId!.Value, partial);
+        await strategy.SyncAsync();
+
+        Assert.Equal(partial, strategy.TrackedNetPosition);
+    }
+
+    [Fact]
+    public async Task SyncAsync_PartialFillThenFull_TrackedNetPositionEqualsFullSize()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel buy = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
+        // First sync: partial fill of half
+        exchange.SimulatePartialFill(buy.OrderId!.Value, buy.Size / 2);
+        await strategy.SyncAsync();
+        strategy.DrainNewFills();
+
+        // Second sync: order disappears (full fill)
+        exchange.SimulateFill(buy.OrderId!.Value);
+        await strategy.SyncAsync();
+
+        Assert.Equal(buy.Size, strategy.TrackedNetPosition);
+    }
+
+    // ── CloseLevelAsync ───────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task CloseLevelAsync_ActiveLevel_ReturnsFalse()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        // Level 0 is Active, not Filled
+        bool result = await strategy.CloseLevelAsync(0);
+        Assert.False(result);
+    }
+
+    [Fact]
+    public async Task CloseLevelAsync_InvalidIndex_ReturnsFalse()
+    {
+        var (strategy, _) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+        Assert.False(await strategy.CloseLevelAsync(999));
+    }
+
+    [Fact]
+    public async Task CloseLevelAsync_FilledBuyLevel_ReturnsTrueAndResetsToInitial()
+    {
+        var (strategy, exchange) = CreateSut();
+        exchange.ClosePartialFillPrice = 51_000m;
+        await strategy.InitialiseAsync(10_000m);
+
+        // Fill the highest Buy (closest to mid) so its counter is placed at a fresh Initial level
+        GridLevel buy = strategy.Levels.Last(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
+        exchange.SimulateFill(buy.OrderId!.Value);
+        await strategy.SyncAsync();
+        strategy.DrainNewFills();
+
+        Assert.Equal(GridLevelStatus.Filled, buy.Status);
+        bool result = await strategy.CloseLevelAsync(buy.Index);
+
+        Assert.True(result);
+        Assert.Equal(GridLevelStatus.Initial, buy.Status);
+        Assert.Null(buy.OrderId);
+        Assert.Equal(0m, buy.NetPositionSize);
+    }
+
+    [Fact]
+    public async Task CloseLevelAsync_FilledLevel_GeneratesCloseFillRecord()
+    {
+        var (strategy, exchange) = CreateSut();
+        exchange.ClosePartialFillPrice = 51_000m;
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel buy = strategy.Levels.Last(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
+        exchange.SimulateFill(buy.OrderId!.Value);
+        await strategy.SyncAsync();
+        strategy.DrainNewFills();
+
+        await strategy.CloseLevelAsync(buy.Index);
+
+        var fills = strategy.DrainNewFills();
+        Assert.NotEmpty(fills);
+        Assert.Contains(fills, f => f.IsClose);
+    }
+
+    [Fact]
+    public async Task CloseLevelAsync_FilledLevel_AdjustsTrackedNetPosition()
+    {
+        var (strategy, exchange) = CreateSut();
+        exchange.ClosePartialFillPrice = 51_000m;
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel buy = strategy.Levels.Last(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
+        exchange.SimulateFill(buy.OrderId!.Value);
+        await strategy.SyncAsync();
+        strategy.DrainNewFills();
+
+        decimal positionBefore = strategy.TrackedNetPosition;  // +0.001
+        decimal levelContrib   = buy.NetPositionSize;           // +0.001
+
+        await strategy.CloseLevelAsync(buy.Index);
+
+        Assert.Equal(positionBefore - levelContrib, strategy.TrackedNetPosition);
     }
 }

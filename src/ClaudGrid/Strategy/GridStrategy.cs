@@ -10,12 +10,19 @@ namespace ClaudGrid.Strategy;
 /// <summary>
 /// Stateful grid order lifecycle manager.
 ///
-/// Responsibilities:
-///   1. Initialise the grid from current market price.
-///   2. Place missing orders on each sync cycle.
-///   3. Detect filled orders by diffing live orders against tracked state.
-///   4. Repost counter-orders after fills.
-///   5. Cancel stale orders when the grid is reset.
+/// Level status machine:
+///   Initial     — no order on the exchange (unplaced, failed, or mid-adjacent skip)
+///   Active      — live limit order on the book, 0% filled
+///   PartialFill — live limit order on the book, partially filled
+///   Filled      — order fully executed; off the exchange
+///
+/// Transitions:
+///   Initial     → Active      : TryPlaceOrderAsync succeeds
+///   Active      → PartialFill : partial fill detected in SyncAsync
+///   Active      → Filled      : order disappears from exchange (full fill)
+///   PartialFill → Filled      : order disappears from exchange (remaining filled)
+///   Filled      → Initial     : counter/closing order fires and re-queues the level
+///   Initial     → Initial     : TryPlaceOrderAsync fails (stays Initial for retry)
 /// </summary>
 public sealed class GridStrategy
 {
@@ -29,9 +36,26 @@ public sealed class GridStrategy
     private decimal _initialEquity;
     private bool _isInitialised;
 
+    /// <summary>
+    /// Running net position derived by summing every fill event:
+    ///   +size on each buy fill, −size on each sell fill.
+    /// Reset to 0 on initialisation (after all positions are closed).
+    /// Used by GridBot.VerifyPositions to compare against the exchange.
+    /// </summary>
+    private decimal _trackedNetPosition;
+
+    /// <summary>
+    /// OrderIds placed during the current SyncAsync call.
+    /// Used to exclude newly placed counter/retry orders from the
+    /// "bot Active level not on exchange" mismatch check, because
+    /// liveOrders was fetched before those orders were placed.
+    /// </summary>
+    private readonly HashSet<long> _newlyPlacedThisCycle = new();
+
     public IReadOnlyList<GridLevel> Levels => _levels;
     public decimal RealizedPnl => _levels.Sum(l => l.RealizedPnl);
     public bool IsInitialised => _isInitialised;
+    public decimal TrackedNetPosition => _trackedNetPosition;
 
     public GridStrategy(IExchangeClient exchange, BotConfig config, ILogger<GridStrategy> logger)
     {
@@ -61,6 +85,10 @@ public sealed class GridStrategy
         if (closed > 0)
             _logger.LogInformation("Closed {Count} stale position(s) — starting flat", closed);
 
+        // All positions closed — reset the fill-derived position tracker
+        _trackedNetPosition = 0;
+        _newlyPlacedThisCycle.Clear();
+
         MarketData market = await _exchange.GetMarketDataAsync(_config.Grid.Symbol, ct);
         _logger.LogInformation("Grid anchor price: {Price:F2}", market.MidPrice);
 
@@ -79,20 +107,23 @@ public sealed class GridStrategy
 
     /// <summary>
     /// Called on each periodic tick. Detects fills and reposts counter-orders.
-    /// Also places any levels that are in Pending state but should be active.
+    /// Also places any levels that are in Initial state (failed/skipped placement).
     /// </summary>
     public async Task SyncAsync(CancellationToken ct = default)
     {
         if (!_isInitialised) return;
 
+        _newlyPlacedThisCycle.Clear();
+
         List<Order> liveOrders = await _exchange.GetOpenOrdersAsync(ct);
         Dictionary<long, Order> liveOrdersById = liveOrders.ToDictionary(o => o.Id);
 
-        // Snapshot active order IDs before the fill loop. Counter-orders placed
-        // inside HandleFillAsync get new IDs that aren't in liveOrdersById, which would
-        // cause them to be falsely detected as filled in the same pass.
+        // Snapshot levels that have live orders before the fill loop. Counter-orders placed
+        // inside HandleFillAsync get new IDs that aren't in liveOrdersById yet, so they
+        // must not be checked in this same pass.
         var toCheck = _levels
-            .Where(l => l.Status == GridLevelStatus.Active && l.OrderId.HasValue)
+            .Where(l => (l.Status == GridLevelStatus.Active || l.Status == GridLevelStatus.PartialFill)
+                        && l.OrderId.HasValue)
             .Select(l => (Level: l, OrderId: l.OrderId!.Value))
             .ToList();
 
@@ -108,6 +139,8 @@ public sealed class GridStrategy
                 decimal newPartial = liveOrder.FilledSize - level.PartialFilledSize;
                 level.PartialFilledSize = liveOrder.FilledSize;
                 level.NetPositionSize += level.Side == GridLevelSide.Sell ? -newPartial : newPartial;
+                _trackedNetPosition   += level.Side == GridLevelSide.Sell ? -newPartial : newPartial;
+                level.Status = GridLevelStatus.PartialFill;
                 _logger.LogInformation(
                     "Partial fill: {Side} {Filled:F4}/{Total:F4} @ {Price:F2} (level {Index})",
                     level.Side, liveOrder.FilledSize, level.Size, level.Price, level.Index);
@@ -116,15 +149,21 @@ public sealed class GridStrategy
             }
         }
 
-        // Re-place any pending levels that should now be active
-        await PlacePendingOrdersAsync(ct);
+        // Re-place any Initial levels (failed placements, mid-adjacent skips, or re-queued after fill)
+        await PlaceInitialOrdersRetryAsync(ct);
 
-        // Check for orders on the exchange that the bot has no record of
+        // ── Two-way order reconciliation ──────────────────────────────────────
+        //
+        // Build the set of bot-tracked order IDs for fast lookup.
+        // Exclude orders placed during this cycle (_newlyPlacedThisCycle) because
+        // liveOrdersById was fetched before those orders existed on the exchange.
         var botOrderIds = _levels
-            .Where(l => l.Status == GridLevelStatus.Active && l.OrderId.HasValue)
+            .Where(l => (l.Status == GridLevelStatus.Active || l.Status == GridLevelStatus.PartialFill)
+                        && l.OrderId.HasValue)
             .Select(l => l.OrderId!.Value)
             .ToHashSet();
 
+        // 1. Exchange → bot: orphaned exchange orders the bot doesn't know about
         foreach (var order in liveOrdersById.Values)
         {
             if (!botOrderIds.Contains(order.Id))
@@ -134,6 +173,22 @@ public sealed class GridStrategy
                     order.Id, order.Side, order.Price);
                 _pendingMismatches.Enqueue(
                     $"Orphaned order oid={order.Id} {order.Side} @ {order.Price:F2} not tracked by bot");
+            }
+        }
+
+        // 2. Bot → exchange: bot thinks an order is active but it's gone from the exchange
+        foreach (var level in _levels)
+        {
+            if ((level.Status == GridLevelStatus.Active || level.Status == GridLevelStatus.PartialFill)
+                && level.OrderId.HasValue
+                && !_newlyPlacedThisCycle.Contains(level.OrderId.Value)
+                && !liveOrdersById.ContainsKey(level.OrderId.Value))
+            {
+                _logger.LogError(
+                    "STATE MISMATCH — bot level {Index} {Side} @ {Price:F2} (oid={Id}) not found on exchange",
+                    level.Index, level.Side, level.Price, level.OrderId.Value);
+                _pendingMismatches.Enqueue(
+                    $"Missing order: level {level.Index} {level.Side} @ {level.Price:F2} (oid={level.OrderId}) not on exchange");
             }
         }
     }
@@ -161,7 +216,7 @@ public sealed class GridStrategy
             // Skip the level nearest to the current price (inside the spread)
             if (Math.Abs(level.Price - midPrice) / midPrice < _config.Grid.GridSpacingPercent / 200m)
             {
-                level.Status = GridLevelStatus.Pending;
+                level.Status = GridLevelStatus.Initial;
                 continue;
             }
 
@@ -169,9 +224,9 @@ public sealed class GridStrategy
         }
     }
 
-    private async Task PlacePendingOrdersAsync(CancellationToken ct)
+    private async Task PlaceInitialOrdersRetryAsync(CancellationToken ct)
     {
-        foreach (GridLevel level in _levels.Where(l => l.Status == GridLevelStatus.Pending))
+        foreach (GridLevel level in _levels.Where(l => l.Status == GridLevelStatus.Initial))
             await TryPlaceOrderAsync(level, ct);
     }
 
@@ -191,12 +246,14 @@ public sealed class GridStrategy
             level.Status = GridLevelStatus.Active;
             level.PlacedAt = DateTime.UtcNow;
             level.PartialFilledSize = 0;
+            _newlyPlacedThisCycle.Add(orderId);
 
             _logger.LogDebug("Placed {Side} order @ {Price:F2} (oid={OId})",
                 level.Side, level.Price, orderId);
         }
         catch (Exception ex)
         {
+            level.Status = GridLevelStatus.Initial;
             _logger.LogWarning(ex, "Failed to place {Side} order @ {Price:F2}", level.Side, level.Price);
         }
     }
@@ -204,7 +261,7 @@ public sealed class GridStrategy
     /// <summary>
     /// Manually closes the open position from a single filled level:
     /// cancels the counter order and places a reduce-only IOC to flatten.
-    /// Resets both levels to Pending so the grid re-places them on the next sync.
+    /// Resets both levels to Initial so the grid re-places them on the next sync.
     /// </summary>
     public async Task<bool> CloseLevelAsync(int index, CancellationToken ct = default)
     {
@@ -216,15 +273,15 @@ public sealed class GridStrategy
         if (counterIndex >= 0 && counterIndex < _levels.Count)
         {
             var counterLevel = _levels[counterIndex];
-            if (counterLevel.Status == GridLevelStatus.Active && counterLevel.OrderId.HasValue)
+            if (counterLevel.Status == GridLevelStatus.Active || counterLevel.Status == GridLevelStatus.PartialFill)
             {
-                await _exchange.CancelOrderAsync(_config.Grid.AssetIndex, counterLevel.OrderId.Value, ct);
+                await _exchange.CancelOrderAsync(_config.Grid.AssetIndex, counterLevel.OrderId!.Value, ct);
                 _logger.LogInformation("Cancelled counter order at level {Index} for manual close", counterIndex);
             }
-            // Reset whether Active or Pending — clears any stale PairedPrice
-            if (counterLevel.Status == GridLevelStatus.Active || counterLevel.Status == GridLevelStatus.Pending)
+            // Reset whether Active or PartialFill — clears any stale PairedPrice
+            if (counterLevel.Status == GridLevelStatus.Active || counterLevel.Status == GridLevelStatus.PartialFill)
             {
-                counterLevel.Status = GridLevelStatus.Pending;
+                counterLevel.Status = GridLevelStatus.Initial;
                 counterLevel.OrderId = null;
                 counterLevel.PairedPrice = 0;
             }
@@ -247,8 +304,11 @@ public sealed class GridStrategy
 
         _pendingFills.Enqueue(new FillRecord(DateTime.UtcNow, closeSide.ToString(), actualFillPrice, level.Size, fillPnl, true));
 
+        // Adjust tracked position to account for removing this level's contribution
+        _trackedNetPosition -= level.NetPositionSize;
+
         // Reset the filled level so the grid re-places it
-        level.Status = GridLevelStatus.Pending;
+        level.Status = GridLevelStatus.Initial;
         level.OrderId = null;
         level.PairedPrice = 0;
         level.FilledAt = null;
@@ -279,19 +339,19 @@ public sealed class GridStrategy
 
         // Only add the portion not already tracked by partial fill detection
         decimal remainingFill = filledLevel.Size - filledLevel.PartialFilledSize;
-        filledLevel.NetPositionSize += filledLevel.Side == GridLevelSide.Sell ? -remainingFill : remainingFill;
+        decimal positionDelta = filledLevel.Side == GridLevelSide.Sell ? -remainingFill : remainingFill;
+        filledLevel.NetPositionSize += positionDelta;
+        _trackedNetPosition         += positionDelta;
         filledLevel.PartialFilledSize = 0;
 
         _logger.LogInformation("Fill detected: {Side} @ {Price:F2} (level {Index})",
             filledLevel.Side, filledLevel.Price, filledLevel.Index);
 
-        // Place counter-order and compute realised PnL (sell fills only).
-        // The fill is always recorded regardless of whether a counter-order is placed.
         decimal fillPnl = 0m;
 
         if (filledLevel.Side == GridLevelSide.Buy)
         {
-            // Realise PnL only if this buy closes a prior sell (PairedPrice = that sell price).
+            // Realise PnL only if this buy closes a prior sell (PairedPrice = that sell price)
             if (filledLevel.PairedPrice > 0)
             {
                 fillPnl = (filledLevel.PairedPrice - filledLevel.Price) * filledLevel.Size;
@@ -305,25 +365,34 @@ public sealed class GridStrategy
             if (counterPrice.HasValue)
             {
                 GridLevel counterLevel = _levels[filledLevel.Index + 1];
-                if (counterLevel.Status != GridLevelStatus.Active)
+                if (counterLevel.Status is GridLevelStatus.Active or GridLevelStatus.PartialFill)
                 {
-                    counterLevel.Side = GridLevelSide.Sell;
-                    counterLevel.PairedPrice = filledLevel.Price; // counter sell will close this buy
-                    counterLevel.Status = GridLevelStatus.Pending;
-                    await TryPlaceOrderAsync(counterLevel, ct);
-                    _logger.LogInformation("Counter SELL @ {Price:F2}", counterPrice.Value);
+                    // Already has a live order — just record the pairing
+                    counterLevel.PairedPrice = filledLevel.Price;
                 }
                 else
                 {
-                    // Order already on the book from initial placement — just record the pairing
-                    // so that when it fills it can compute the correct round-trip PnL.
+                    // No live order (Initial or Filled) — reset and place a new Sell
+                    if (counterLevel.Status == GridLevelStatus.Filled && counterLevel.Side == GridLevelSide.Sell)
+                    {
+                        // Both sides of a round trip are now complete: zero both position contributions
+                        counterLevel.NetPositionSize = 0;
+                        filledLevel.NetPositionSize  = 0;
+                    }
+                    counterLevel.Status = GridLevelStatus.Initial;
+                    counterLevel.OrderId = null;
+                    counterLevel.FilledAt = null;
+                    counterLevel.PartialFilledSize = 0;
+                    counterLevel.Side = GridLevelSide.Sell;
                     counterLevel.PairedPrice = filledLevel.Price;
+                    await TryPlaceOrderAsync(counterLevel, ct);
+                    _logger.LogInformation("Counter SELL @ {Price:F2}", counterPrice.Value);
                 }
             }
         }
         else // Sell filled
         {
-            // Realise PnL only if this sell closes a prior buy (PairedPrice = that buy price).
+            // Realise PnL only if this sell closes a prior buy (PairedPrice = that buy price)
             if (filledLevel.PairedPrice > 0)
             {
                 fillPnl = (filledLevel.Price - filledLevel.PairedPrice) * filledLevel.Size;
@@ -337,31 +406,32 @@ public sealed class GridStrategy
             if (counterPrice.HasValue)
             {
                 GridLevel counterLevel = _levels[filledLevel.Index - 1];
-                if (counterLevel.Status != GridLevelStatus.Active)
+                if (counterLevel.Status is GridLevelStatus.Active or GridLevelStatus.PartialFill)
                 {
-                    counterLevel.Side = GridLevelSide.Buy;
-                    counterLevel.PairedPrice = filledLevel.Price; // counter buy will close this sell
-                    counterLevel.Status = GridLevelStatus.Pending;
-                    await TryPlaceOrderAsync(counterLevel, ct);
-                    _logger.LogInformation("Counter BUY @ {Price:F2}", counterPrice.Value);
+                    // Already has a live order — just record the pairing
+                    counterLevel.PairedPrice = filledLevel.Price;
                 }
                 else
                 {
-                    // Order already on the book from initial placement — just record the pairing
-                    // so that when it fills it can compute the correct round-trip PnL.
+                    // No live order (Initial or Filled) — reset and place a new Buy
+                    if (counterLevel.Status == GridLevelStatus.Filled && counterLevel.Side == GridLevelSide.Buy)
+                    {
+                        // Both sides of a round trip are now complete: zero both position contributions
+                        counterLevel.NetPositionSize = 0;
+                        filledLevel.NetPositionSize  = 0;
+                    }
+                    counterLevel.Status = GridLevelStatus.Initial;
+                    counterLevel.OrderId = null;
+                    counterLevel.FilledAt = null;
+                    counterLevel.PartialFilledSize = 0;
+                    counterLevel.Side = GridLevelSide.Buy;
                     counterLevel.PairedPrice = filledLevel.Price;
+                    await TryPlaceOrderAsync(counterLevel, ct);
+                    _logger.LogInformation("Counter BUY @ {Price:F2}", counterPrice.Value);
                 }
             }
         }
 
         _pendingFills.Enqueue(new FillRecord(DateTime.UtcNow, filledLevel.Side.ToString(), filledLevel.Price, filledLevel.Size, fillPnl, filledLevel.PairedPrice > 0));
-
-        // Re-queue for re-placement so every grid slot stays occupied.
-        // NetPositionSize and RealizedPnl are cumulative — never reset here.
-        filledLevel.Status = GridLevelStatus.Pending;
-        filledLevel.OrderId = null;
-        filledLevel.PairedPrice = 0;
-        filledLevel.FilledAt = null;
-        filledLevel.PartialFilledSize = 0;
     }
 }

@@ -4,10 +4,10 @@ public enum GridLevelSide { Buy, Sell }
 
 public enum GridLevelStatus
 {
-    Pending,    // Not yet placed on the exchange
-    Active,     // Live limit order on the book
-    Filled,     // Order has been fully filled
-    Cancelled   // Order was cancelled
+    Initial,      // No order on the exchange (unplaced, failed, or mid-adjacent skip)
+    Active,       // Live limit order on the book, 0% filled
+    PartialFill,  // Live limit order on the book, partially filled
+    Filled,       // Order fully filled; off the exchange
 }
 
 /// <summary>Represents one level in the grid.</summary>
@@ -20,7 +20,7 @@ public sealed class GridLevel
 
     public GridLevelSide Side { get; set; }
 
-    public GridLevelStatus Status { get; set; } = GridLevelStatus.Pending;
+    public GridLevelStatus Status { get; set; } = GridLevelStatus.Initial;
 
     /// <summary>Exchange-assigned order ID once the order is placed.</summary>
     public long? OrderId { get; set; }
