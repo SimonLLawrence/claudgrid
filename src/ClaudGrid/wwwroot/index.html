@@ -189,6 +189,23 @@
     }
     .tab-btn:hover { color: #e6edf3; }
     .tab-active { color: #e6edf3 !important; border-bottom-color: #58a6ff !important; }
+    .tab-mismatch-badge {
+      display: inline-block;
+      background: #b94040;
+      color: #fff;
+      border-radius: 9px;
+      font-size: 10px;
+      font-weight: bold;
+      padding: 1px 6px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .tab-mismatch-badge.hidden { display: none; }
+    @keyframes mismatch-pulse {
+      0%, 100% { background: #161b22; }
+      50%       { background: #3d1010; }
+    }
+    .mismatch-bar.has-errors { animation: mismatch-pulse 1.5s ease-in-out infinite; }
 
     /* ── Tab panels ── */
     #tab-dashboard { flex: 1; display: flex; flex-direction: column; min-height: 0; }
@@ -316,7 +333,7 @@
 </div>
 
 <div class="tab-bar">
-  <button class="tab-btn tab-active" data-tab="dashboard" onclick="showTab('dashboard')">Dashboard</button>
+  <button class="tab-btn tab-active" data-tab="dashboard" onclick="showTab('dashboard')">Dashboard<span id="tab-mismatch-badge" class="tab-mismatch-badge hidden"></span></button>
   <button class="tab-btn" data-tab="config" onclick="showTab('config')">Configuration</button>
 </div>
 
@@ -602,17 +619,49 @@
       </tr>`).join('');
   }
 
+  let _lastMismatchCount = 0;
+
+  function playMismatchAlert() {
+    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = _audioCtx;
+    // Two descending tones — distinct from the fill bell
+    [440, 330].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'square';
+      const t = ctx.currentTime + i * 0.18;
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.15, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+      osc.start(t); osc.stop(t + 0.35);
+    });
+  }
+
   function updateMismatches(mismatches) {
-    const body = document.getElementById('mismatch-body');
-    const count = document.getElementById('mismatch-count');
-    if (!mismatches || !mismatches.length) {
+    const body    = document.getElementById('mismatch-body');
+    const count   = document.getElementById('mismatch-count');
+    const badge   = document.getElementById('tab-mismatch-badge');
+    const bar     = body.closest('.mismatch-bar');
+    const n       = mismatches ? mismatches.length : 0;
+
+    if (n > _lastMismatchCount) playMismatchAlert();
+    _lastMismatchCount = n;
+
+    if (!n) {
       body.className = 'mismatch-empty';
       body.textContent = 'No mismatches detected';
       count.classList.add('hidden');
+      badge.classList.add('hidden');
+      bar.classList.remove('has-errors');
       return;
     }
-    count.textContent = mismatches.length;
+
+    count.textContent = n;
     count.classList.remove('hidden');
+    badge.textContent = n;
+    badge.classList.remove('hidden');
+    bar.classList.add('has-errors');
     body.className = '';
     body.innerHTML = mismatches.map(m => `
       <div class="mismatch-row">
