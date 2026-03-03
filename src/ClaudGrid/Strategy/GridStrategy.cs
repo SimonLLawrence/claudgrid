@@ -25,6 +25,7 @@ public sealed class GridStrategy
 
     private List<GridLevel> _levels = new();
     private readonly ConcurrentQueue<FillRecord> _pendingFills = new();
+    private readonly ConcurrentQueue<string> _pendingMismatches = new();
     private decimal _initialEquity;
     private bool _isInitialised;
 
@@ -113,9 +114,13 @@ public sealed class GridStrategy
         foreach (var order in liveOrders)
         {
             if (!botOrderIds.Contains(order.Id))
+            {
                 _logger.LogError(
                     "STATE MISMATCH — orphaned exchange order: oid={Id} {Side} @ {Price} not tracked by bot",
                     order.Id, order.Side, order.Price);
+                _pendingMismatches.Enqueue(
+                    $"Orphaned order oid={order.Id} {order.Side} @ {order.Price:F2} not tracked by bot");
+            }
         }
     }
 
@@ -241,6 +246,13 @@ public sealed class GridStrategy
         var fills = new List<FillRecord>();
         while (_pendingFills.TryDequeue(out var f)) fills.Add(f);
         return fills;
+    }
+
+    public IReadOnlyList<string> DrainMismatches()
+    {
+        var list = new List<string>();
+        while (_pendingMismatches.TryDequeue(out var m)) list.Add(m);
+        return list;
     }
 
     private async Task HandleFillAsync(GridLevel filledLevel, CancellationToken ct)

@@ -247,6 +247,41 @@
     #btn-apply-config:disabled { opacity: 0.5; cursor: default; }
     #config-msg { font-size: 12px; }
 
+    /* ── Mismatch log ── */
+    .mismatch-bar {
+      background: #161b22;
+      border-top: 1px solid #30363d;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      max-height: 130px;
+    }
+    .mismatch-bar h3 {
+      font-size: 11px;
+      color: #d29922;
+      text-transform: uppercase;
+      padding: 7px 14px 5px;
+      border-bottom: 1px solid #21262d;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .mismatch-count {
+      background: #6b3c00;
+      color: #d29922;
+      border-radius: 10px;
+      font-size: 10px;
+      padding: 1px 7px;
+      font-weight: bold;
+    }
+    .mismatch-count.hidden { display: none; }
+    .mismatch-scroll { overflow-y: auto; flex: 1; }
+    .mismatch-row { display: flex; gap: 16px; padding: 3px 14px; font-size: 11px; border-bottom: 1px solid #1a1f27; }
+    .mismatch-time { color: #8b949e; white-space: nowrap; flex-shrink: 0; }
+    .mismatch-msg  { color: #d29922; }
+    .mismatch-empty { color: #6e7681; padding: 8px 14px; font-size: 11px; }
+
     /* ── Footer ── */
     footer {
       background: #161b22;
@@ -321,6 +356,13 @@
         </tbody>
       </table>
     </div>
+  </div>
+</div>
+
+<div class="mismatch-bar">
+  <h3>State Mismatches <span id="mismatch-count" class="mismatch-count hidden">0</span></h3>
+  <div class="mismatch-scroll">
+    <div id="mismatch-body" class="mismatch-empty">No mismatches detected</div>
   </div>
 </div>
 </div><!-- #tab-dashboard -->
@@ -549,6 +591,25 @@
       </tr>`).join('');
   }
 
+  function updateMismatches(mismatches) {
+    const body = document.getElementById('mismatch-body');
+    const count = document.getElementById('mismatch-count');
+    if (!mismatches || !mismatches.length) {
+      body.className = 'mismatch-empty';
+      body.textContent = 'No mismatches detected';
+      count.classList.add('hidden');
+      return;
+    }
+    count.textContent = mismatches.length;
+    count.classList.remove('hidden');
+    body.className = '';
+    body.innerHTML = mismatches.map(m => `
+      <div class="mismatch-row">
+        <span class="mismatch-time">${fmtT(m.time)}</span>
+        <span class="mismatch-msg">${m.message}</span>
+      </div>`).join('');
+  }
+
   // ── Shutdown ───────────────────────────────────────────────────────────────
 
   async function shutdown() {
@@ -602,6 +663,7 @@
       updateCharts(data);
       updateLevels(data.levels);
       updateFills(data.recentFills);
+      updateMismatches(data.recentMismatches);
 
       document.getElementById('footer').textContent =
         'Last updated: ' + new Date().toLocaleTimeString();

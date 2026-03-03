@@ -6,6 +6,7 @@ public record PricePoint(DateTime Time, decimal Price);
 public record PnlPoint(DateTime Time, decimal Pnl);
 public record FillRecord(DateTime Time, string Side, decimal Price, decimal Size, decimal Pnl, bool IsClose);
 public record GridLevelDto(int Index, string Side, decimal Price, decimal Size, string Status, decimal Pnl);
+public record MismatchRecord(DateTime Time, string Message);
 
 public sealed class BotSnapshot
 {
@@ -23,6 +24,7 @@ public sealed class BotSnapshot
     public List<FillRecord> RecentFills { get; set; } = new();
     public List<PricePoint> PriceHistory { get; set; } = new();
     public List<PnlPoint> PnlHistory { get; set; } = new();
+    public List<MismatchRecord> RecentMismatches { get; set; } = new();
 }
 
 public sealed class BotStatusService
@@ -31,12 +33,14 @@ public sealed class BotStatusService
     private readonly Queue<PricePoint> _priceHistory = new();
     private readonly Queue<PnlPoint> _pnlHistory = new();
     private readonly Queue<FillRecord> _recentFills = new();
+    private readonly Queue<MismatchRecord> _mismatches = new();
     private int _totalFills;
     private decimal _peakEquity;
     private BotSnapshot _snapshot = new();
 
     private const int MaxHistory = 120;
     private const int MaxFills = 50;
+    private const int MaxMismatches = 20;
 
     public void UpdateFromSync(
         decimal midPrice, decimal equity, decimal available, decimal pnl,
@@ -81,7 +85,8 @@ public sealed class BotStatusService
                     l.Status.ToString(), l.RealizedPnl)).ToList(),
                 RecentFills = _recentFills.Reverse().ToList(),
                 PriceHistory = _priceHistory.ToList(),
-                PnlHistory = _pnlHistory.ToList()
+                PnlHistory = _pnlHistory.ToList(),
+                RecentMismatches = _mismatches.Reverse().ToList()
             };
         }
     }
@@ -122,8 +127,19 @@ public sealed class BotStatusService
                     l.Status.ToString(), l.RealizedPnl)).ToList(),
                 RecentFills = _recentFills.Reverse().ToList(),
                 PriceHistory = s.PriceHistory,
-                PnlHistory = s.PnlHistory
+                PnlHistory = s.PnlHistory,
+                RecentMismatches = _mismatches.Reverse().ToList()
             };
+        }
+    }
+
+    public void RecordMismatch(string message)
+    {
+        lock (_lock)
+        {
+            _mismatches.Enqueue(new MismatchRecord(DateTime.UtcNow, message));
+            if (_mismatches.Count > MaxMismatches) _mismatches.Dequeue();
+            _snapshot.RecentMismatches = _mismatches.Reverse().ToList();
         }
     }
 

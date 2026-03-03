@@ -157,6 +157,8 @@ public sealed class GridBot : BackgroundService
                     _status.UpdateFromSync(market.MidPrice, account.TotalEquity,
                         account.AvailableBalance, _strategy.RealizedPnl,
                         _syncCount, _strategy.Levels, newFills);
+                    foreach (var msg in _strategy.DrainMismatches())
+                        _status.RecordMismatch(msg);
                     VerifyPositions(account);
                     LogPnlSummary(account);
                     break;
@@ -201,9 +203,13 @@ public sealed class GridBot : BackgroundService
             .Sum(p => p.Size);
 
         if (Math.Abs(expectedNet - actualNet) > 0.0001m)
+        {
             _logger.LogError(
                 "STATE MISMATCH — position: bot expects {Expected:F4} {Symbol} net, exchange shows {Actual:F4}",
                 expectedNet, _config.Grid.Symbol, actualNet);
+            _status.RecordMismatch(
+                $"Position mismatch: bot expects {expectedNet:F4} {_config.Grid.Symbol}, exchange shows {actualNet:F4}");
+        }
     }
 
     private void LogPnlSummary(AccountState account)
