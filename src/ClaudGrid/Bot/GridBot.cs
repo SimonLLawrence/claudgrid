@@ -153,14 +153,17 @@ public sealed class GridBot : BackgroundService
                     }
 
                     await _strategy.SyncAsync(ct);
+
+                    // Re-fetch account after sync so VerifyPositions sees post-fill positions.
+                    AccountState postSyncAccount = await _exchange.GetAccountStateAsync(ct);
                     var newFills = _strategy.DrainNewFills();
-                    _status.UpdateFromSync(market.MidPrice, account.TotalEquity,
-                        account.AvailableBalance, _strategy.RealizedPnl,
+                    _status.UpdateFromSync(market.MidPrice, postSyncAccount.TotalEquity,
+                        postSyncAccount.AvailableBalance, _strategy.RealizedPnl,
                         _syncCount, _strategy.Levels, newFills);
                     foreach (var msg in _strategy.DrainMismatches())
                         _status.RecordMismatch(msg);
-                    VerifyPositions(account);
-                    LogPnlSummary(account);
+                    VerifyPositions(postSyncAccount);
+                    LogPnlSummary();
                     break;
             }
         }
@@ -210,7 +213,7 @@ public sealed class GridBot : BackgroundService
         }
     }
 
-    private void LogPnlSummary(AccountState account)
+    private void LogPnlSummary()
     {
         int active = _strategy.Levels.Count(l => l.Status == Models.GridLevelStatus.Active);
         int filled = _strategy.Levels.Count(l => l.Status == Models.GridLevelStatus.Filled);
