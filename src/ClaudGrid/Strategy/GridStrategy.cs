@@ -86,10 +86,10 @@ public sealed class GridStrategy
         if (!_isInitialised) return;
 
         List<Order> liveOrders = await _exchange.GetOpenOrdersAsync(ct);
-        HashSet<long> liveIds = liveOrders.Select(o => o.Id).ToHashSet();
+        Dictionary<long, Order> liveOrdersById = liveOrders.ToDictionary(o => o.Id);
 
         // Snapshot active order IDs before the fill loop. Counter-orders placed
-        // inside HandleFillAsync get new IDs that aren't in liveIds, which would
+        // inside HandleFillAsync get new IDs that aren't in liveOrdersById, which would
         // cause them to be falsely detected as filled in the same pass.
         var toCheck = _levels
             .Where(l => l.Status == GridLevelStatus.Active && l.OrderId.HasValue)
@@ -98,8 +98,22 @@ public sealed class GridStrategy
 
         foreach (var (level, orderId) in toCheck)
         {
-            if (!liveIds.Contains(orderId))
+            if (!liveOrdersById.TryGetValue(orderId, out var liveOrder))
+            {
                 await HandleFillAsync(level, ct);
+            }
+            else if (liveOrder.FilledSize > level.PartialFilledSize)
+            {
+                // Partial fill: order still open but more has been filled since last sync
+                decimal newPartial = liveOrder.FilledSize - level.PartialFilledSize;
+                level.PartialFilledSize = liveOrder.FilledSize;
+                level.NetPositionSize += level.Side == GridLevelSide.Sell ? -newPartial : newPartial;
+                _logger.LogInformation(
+                    "Partial fill: {Side} {Filled:F4}/{Total:F4} @ {Price:F2} (level {Index})",
+                    level.Side, liveOrder.FilledSize, level.Size, level.Price, level.Index);
+                _pendingFills.Enqueue(new FillRecord(
+                    DateTime.UtcNow, level.Side.ToString(), level.Price, newPartial, 0m, false));
+            }
         }
 
         // Re-place any pending levels that should now be active
@@ -111,7 +125,7 @@ public sealed class GridStrategy
             .Select(l => l.OrderId!.Value)
             .ToHashSet();
 
-        foreach (var order in liveOrders)
+        foreach (var order in liveOrdersById.Values)
         {
             if (!botOrderIds.Contains(order.Id))
             {
@@ -176,6 +190,7 @@ public sealed class GridStrategy
             level.OrderId = orderId;
             level.Status = GridLevelStatus.Active;
             level.PlacedAt = DateTime.UtcNow;
+            level.PartialFilledSize = 0;
 
             _logger.LogDebug("Placed {Side} order @ {Price:F2} (oid={OId})",
                 level.Side, level.Price, orderId);
@@ -238,6 +253,7 @@ public sealed class GridStrategy
         level.PairedPrice = 0;
         level.FilledAt = null;
         level.NetPositionSize = 0;
+        level.PartialFilledSize = 0;
         _logger.LogInformation("Manually closed fill pair at level {Index} ({Side} @ {Price:F0}), PnL: {Pnl:F4}", index, level.Side, level.Price, fillPnl);
         return true;
     }
@@ -260,9 +276,11 @@ public sealed class GridStrategy
     {
         filledLevel.Status = GridLevelStatus.Filled;
         filledLevel.FilledAt = DateTime.UtcNow;
-        filledLevel.NetPositionSize += filledLevel.Side == GridLevelSide.Sell
-            ? -filledLevel.Size
-            : filledLevel.Size;
+
+        // Only add the portion not already tracked by partial fill detection
+        decimal remainingFill = filledLevel.Size - filledLevel.PartialFilledSize;
+        filledLevel.NetPositionSize += filledLevel.Side == GridLevelSide.Sell ? -remainingFill : remainingFill;
+        filledLevel.PartialFilledSize = 0;
 
         _logger.LogInformation("Fill detected: {Side} @ {Price:F2} (level {Index})",
             filledLevel.Side, filledLevel.Price, filledLevel.Index);

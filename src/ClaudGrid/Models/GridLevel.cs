@@ -49,6 +49,13 @@ public sealed class GridLevel
     /// </summary>
     public decimal NetPositionSize { get; set; }
 
+    /// <summary>
+    /// How much of the current active order has been partially filled so far.
+    /// Reset to zero each time a new order is placed or the order fully fills.
+    /// Used to detect incremental partial fills between sync cycles.
+    /// </summary>
+    public decimal PartialFilledSize { get; set; }
+
     public override string ToString() =>
         $"Level[{Index}] {Side} @ {Price:F2} — {Status}";
 }
