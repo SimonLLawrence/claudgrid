@@ -139,6 +139,7 @@
     .s-filled    { color: #3fb950; }
     .s-pending   { color: #d29922; }
     .s-cancelled { color: #6e7681; }
+    .s-active-pos { color: #e3b341; }  /* Active but carrying an open position */
     .side-buy    { color: #3fb950; }
     .side-sell   { color: #f85149; }
 
@@ -309,6 +310,7 @@
   <div class="stat"><div class="stat-label">Realized PnL</div><div class="stat-value" id="s-pnl">—</div></div>
   <div class="stat"><div class="stat-label">Drawdown</div><div class="stat-value" id="s-dd">—</div></div>
   <div class="stat"><div class="stat-label">Active Orders</div><div class="stat-value" id="s-active">—</div></div>
+  <div class="stat"><div class="stat-label">Net Position</div><div class="stat-value" id="s-netpos">—</div></div>
   <div class="stat"><div class="stat-label">Fills</div><div class="stat-value" id="s-fills">—</div></div>
   <div class="stat"><div class="stat-label">Syncs</div><div class="stat-value" id="s-syncs">—</div></div>
 </div>
@@ -478,6 +480,12 @@
     ddEl.className = 'stat-value ' + (d.drawdownPercent > 0 ? 'neg' : 'pos');
 
     setText('s-active', d.activeOrders);
+
+    const npEl = document.getElementById('s-netpos');
+    const np = d.netPosition || 0;
+    npEl.textContent = (np > 0 ? '+' : '') + fmt(np, 4) + ' BTC';
+    npEl.className = 'stat-value ' + (Math.abs(np) < 0.00001 ? '' : np > 0 ? 'pos' : 'neg');
+
     setText('s-fills',  d.totalFills);
     setText('s-syncs',  d.syncCount);
   }
@@ -522,10 +530,10 @@
   let _midPrice = 0;
 
   function unrealizedPnl(level) {
-    if (level.status !== 'Filled') return null;
-    return level.side === 'Buy'
-      ? (_midPrice - level.price) * level.size
-      : (level.price - _midPrice) * level.size;
+    if (!level.netPositionSize || level.netPositionSize === 0) return null;
+    // netPositionSize is signed: positive = long, negative = short
+    // upnl = netPositionSize * (midPrice - entryPrice)
+    return level.netPositionSize * (_midPrice - level.price);
   }
 
   function updateLevels(levels) {
@@ -543,12 +551,15 @@
       const closeBtn = l.status === 'Filled'
         ? `<td><button class="btn-close" onclick="closeLevel(${l.index}, this)">Close</button></td>`
         : `<td></td>`;
+      const hasOpenPos = l.netPositionSize && l.netPositionSize !== 0;
+      const statusClass = hasOpenPos && l.status !== 'Filled' ? 's-active-pos' : statusCls(l.status);
+      const statusLabel = l.status + (hasOpenPos && l.status !== 'Filled' ? ' ◆' : '');
       return `<tr>
         <td>${l.index}</td>
         <td class="${sideCls(l.side)}">${l.side}</td>
         <td>${fmtK(l.price)}</td>
         <td>${fmt(l.size, 4)}</td>
-        <td class="${statusCls(l.status)}">${l.status}</td>
+        <td class="${statusClass}">${statusLabel}</td>
         <td class="${pnlCls(l.pnl)}">${fmt(l.pnl, 4)}</td>
         ${upnlCell}
         ${closeBtn}

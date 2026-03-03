@@ -5,7 +5,7 @@ namespace ClaudGrid.Web;
 public record PricePoint(DateTime Time, decimal Price);
 public record PnlPoint(DateTime Time, decimal Pnl);
 public record FillRecord(DateTime Time, string Side, decimal Price, decimal Size, decimal Pnl, bool IsClose);
-public record GridLevelDto(int Index, string Side, decimal Price, decimal Size, string Status, decimal Pnl);
+public record GridLevelDto(int Index, string Side, decimal Price, decimal Size, string Status, decimal Pnl, decimal NetPositionSize);
 public record MismatchRecord(DateTime Time, string Message);
 
 public sealed class BotSnapshot
@@ -20,6 +20,7 @@ public sealed class BotSnapshot
     public int ActiveOrders { get; set; }
     public int FilledLevels { get; set; }
     public int TotalFills { get; set; }
+    public decimal NetPosition { get; set; }
     public List<GridLevelDto> Levels { get; set; } = new();
     public List<FillRecord> RecentFills { get; set; } = new();
     public List<PricePoint> PriceHistory { get; set; } = new();
@@ -80,9 +81,10 @@ public sealed class BotStatusService
                 ActiveOrders = levels.Count(l => l.Status == GridLevelStatus.Active),
                 FilledLevels = levels.Count(l => l.Status == GridLevelStatus.Filled),
                 TotalFills = _totalFills,
+                NetPosition = levels.Sum(l => l.NetPositionSize),
                 Levels = levels.Select(l => new GridLevelDto(
                     l.Index, l.Side.ToString(), l.Price, l.Size,
-                    l.Status.ToString(), l.RealizedPnl)).ToList(),
+                    l.Status.ToString(), l.RealizedPnl, l.NetPositionSize)).ToList(),
                 RecentFills = _recentFills.Reverse().ToList(),
                 PriceHistory = _priceHistory.ToList(),
                 PnlHistory = _pnlHistory.ToList(),
@@ -122,9 +124,10 @@ public sealed class BotStatusService
                 ActiveOrders = levels.Count(l => l.Status == GridLevelStatus.Active),
                 FilledLevels = levels.Count(l => l.Status == GridLevelStatus.Filled),
                 TotalFills = _totalFills,
+                NetPosition = levels.Sum(l => l.NetPositionSize),
                 Levels = levels.Select(l => new GridLevelDto(
                     l.Index, l.Side.ToString(), l.Price, l.Size,
-                    l.Status.ToString(), l.RealizedPnl)).ToList(),
+                    l.Status.ToString(), l.RealizedPnl, l.NetPositionSize)).ToList(),
                 RecentFills = _recentFills.Reverse().ToList(),
                 PriceHistory = s.PriceHistory,
                 PnlHistory = s.PnlHistory,
