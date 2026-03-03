@@ -208,56 +208,65 @@ public sealed class HyperliquidClient : IExchangeClient
 
     public async Task<int> CloseAllPositionsAsync(string symbol, int assetIndex, CancellationToken ct = default)
     {
-        var account = await GetAccountStateAsync(ct);
-        var position = account.Positions.FirstOrDefault(p => p.Symbol == symbol);
-        if (position == null || position.Size == 0) return 0;
+        int closedCount = 0;
+        const int maxAttempts = 3;
 
-        var market = await GetMarketDataAsync(symbol, ct);
-        decimal size = Math.Abs(position.Size);
-        bool isBuy = position.Size < 0; // short → close with buy; long → close with sell
-        decimal slippage = 0.02m;
-        decimal price = isBuy ? market.MidPrice * (1 + slippage) : market.MidPrice * (1 - slippage);
-        // Round to tick size (1.0 for BTC perp)
-        price = Math.Round(price, 0, MidpointRounding.AwayFromZero);
-
-        long nonce = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var orderWire = new Dictionary<string, object>
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            ["a"] = assetIndex,
-            ["b"] = isBuy,
-            ["p"] = FloatToWire(price),
-            ["s"] = FloatToWire(size),
-            ["r"] = true, // reduceOnly
-            ["t"] = new Dictionary<string, object>
+            var account = await GetAccountStateAsync(ct);
+            var position = account.Positions.FirstOrDefault(p => p.Symbol == symbol);
+            if (position == null || Math.Abs(position.Size) < 0.00001m) break; // confirmed flat
+
+            var market = await GetMarketDataAsync(symbol, ct);
+            decimal size = Math.Abs(position.Size);
+            bool isBuy = position.Size < 0; // short → close with buy; long → close with sell
+            decimal slippage = 0.02m;
+            decimal price = isBuy ? market.MidPrice * (1 + slippage) : market.MidPrice * (1 - slippage);
+            price = Math.Round(price, 0, MidpointRounding.AwayFromZero);
+
+            if (attempt > 1)
+                _logger.LogWarning("Close attempt {Attempt}: residual position {Size} {Symbol} remains", attempt, position.Size, symbol);
+
+            long nonce = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var orderWire = new Dictionary<string, object>
             {
-                ["limit"] = new Dictionary<string, object> { ["tif"] = "Ioc" }
+                ["a"] = assetIndex,
+                ["b"] = isBuy,
+                ["p"] = FloatToWire(price),
+                ["s"] = FloatToWire(size),
+                ["r"] = true, // reduceOnly
+                ["t"] = new Dictionary<string, object>
+                {
+                    ["limit"] = new Dictionary<string, object> { ["tif"] = "Ioc" }
+                }
+            };
+
+            var action = new Dictionary<string, object>
+            {
+                ["type"] = "order",
+                ["orders"] = new List<object> { orderWire },
+                ["grouping"] = "na"
+            };
+
+            byte[] msgPack = MsgPackEncode(action);
+            var (r, s, v) = _signer.SignAction(msgPack, nonce);
+            string responseJson = await PostExchangeAsync(action, nonce, r, s, v, ct);
+
+            var node = JsonNode.Parse(responseJson);
+            var status = node?["response"]?["data"]?["statuses"]?[0];
+            string? error = status?["error"]?.GetValue<string>();
+            if (error != null)
+            {
+                _logger.LogWarning("Failed to close position {Symbol}: {Error}", symbol, error);
+                break;
             }
-        };
 
-        var action = new Dictionary<string, object>
-        {
-            ["type"] = "order",
-            ["orders"] = new List<object> { orderWire },
-            ["grouping"] = "na"
-        };
-
-        byte[] msgPack = MsgPackEncode(action);
-        var (r, s, v) = _signer.SignAction(msgPack, nonce);
-        string responseJson = await PostExchangeAsync(action, nonce, r, s, v, ct);
-
-        // Check for exchange-level errors in the response
-        var node = JsonNode.Parse(responseJson);
-        var status = node?["response"]?["data"]?["statuses"]?[0];
-        string? error = status?["error"]?.GetValue<string>();
-        if (error != null)
-        {
-            _logger.LogWarning("Failed to close position {Symbol}: {Error}", symbol, error);
-            return 0;
+            _logger.LogInformation("Closed stale position: {Side} {Size} {Symbol} @ {Price:F2}",
+                isBuy ? "Buy" : "Sell", size, symbol, price);
+            closedCount++;
         }
 
-        _logger.LogInformation("Closed stale position: {Side} {Size} {Symbol} @ {Price:F2}",
-            isBuy ? "Buy" : "Sell", size, symbol, price);
-        return 1;
+        return closedCount;
     }
 
     public async Task<decimal> ClosePartialPositionAsync(string symbol, int assetIndex, OrderSide closeSide, decimal size, CancellationToken ct = default)
