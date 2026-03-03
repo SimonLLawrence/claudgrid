@@ -103,6 +103,20 @@ public sealed class GridStrategy
 
         // Re-place any pending levels that should now be active
         await PlacePendingOrdersAsync(ct);
+
+        // Check for orders on the exchange that the bot has no record of
+        var botOrderIds = _levels
+            .Where(l => l.Status == GridLevelStatus.Active && l.OrderId.HasValue)
+            .Select(l => l.OrderId!.Value)
+            .ToHashSet();
+
+        foreach (var order in liveOrders)
+        {
+            if (!botOrderIds.Contains(order.Id))
+                _logger.LogError(
+                    "STATE MISMATCH — orphaned exchange order: oid={Id} {Side} @ {Price} not tracked by bot",
+                    order.Id, order.Side, order.Price);
+        }
     }
 
     // ── Grid reset ────────────────────────────────────────────────────────────

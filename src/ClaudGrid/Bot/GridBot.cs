@@ -157,6 +157,7 @@ public sealed class GridBot : BackgroundService
                     _status.UpdateFromSync(market.MidPrice, account.TotalEquity,
                         account.AvailableBalance, _strategy.RealizedPnl,
                         _syncCount, _strategy.Levels, newFills);
+                    VerifyPositions(account);
                     LogPnlSummary(account);
                     break;
             }
@@ -187,6 +188,22 @@ public sealed class GridBot : BackgroundService
         _gridUpper = _strategy.Levels[^1].Price;
         _logger.LogInformation(
             "Grid bounds updated: [{Lower:F2}, {Upper:F2}]", _gridLower, _gridUpper);
+    }
+
+    private void VerifyPositions(AccountState account)
+    {
+        decimal expectedNet = _strategy.Levels
+            .Where(l => l.Status == Models.GridLevelStatus.Filled)
+            .Sum(l => l.Side == Models.GridLevelSide.Buy ? l.Size : -l.Size);
+
+        decimal actualNet = account.Positions
+            .Where(p => p.Symbol == _config.Grid.Symbol)
+            .Sum(p => p.Size);
+
+        if (Math.Abs(expectedNet - actualNet) > 0.0001m)
+            _logger.LogError(
+                "STATE MISMATCH — position: bot expects {Expected:F4} {Symbol} net, exchange shows {Actual:F4}",
+                expectedNet, _config.Grid.Symbol, actualNet);
     }
 
     private void LogPnlSummary(AccountState account)
