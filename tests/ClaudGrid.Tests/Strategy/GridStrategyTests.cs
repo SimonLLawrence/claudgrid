@@ -95,8 +95,9 @@ public sealed class GridStrategyTests
         exchange.SimulateFill(filledId);
         await strategy.SyncAsync();
 
-        int filledCount = strategy.Levels.Count(l => l.Status == GridLevelStatus.Filled);
-        Assert.Equal(1, filledCount);
+        // Filled levels are immediately re-queued — verify via the fill record instead
+        var fills = strategy.DrainNewFills();
+        Assert.Equal(1, fills.Count);
     }
 
     [Fact]
@@ -116,12 +117,10 @@ public sealed class GridStrategyTests
         exchange.SimulateFill(buyLevel.OrderId.Value);
         await strategy.SyncAsync();
 
-        // A counter sell order should have been placed
-        Assert.True(exchange.PlacedOrders.Count > initialOrderCount,
-            "Expected a counter order to be placed after fill");
-
-        var lastOrder = exchange.PlacedOrders.Last();
-        Assert.Equal(OrderSide.Sell, lastOrder.Side);
+        // A counter sell order + a re-placement buy should have been placed
+        var newOrders = exchange.PlacedOrders.Skip(initialOrderCount).ToList();
+        Assert.True(newOrders.Count >= 2, "Expected counter order and re-placement order");
+        Assert.Contains(newOrders, o => o.Side == OrderSide.Sell);
     }
 
     // ── Reset ─────────────────────────────────────────────────────────────────

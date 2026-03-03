@@ -355,5 +355,13 @@ public sealed class GridStrategy
         }
 
         _pendingFills.Enqueue(new FillRecord(DateTime.UtcNow, filledLevel.Side.ToString(), filledLevel.Price, filledLevel.Size, fillPnl, filledLevel.PairedPrice > 0));
+
+        // Re-queue for re-placement so every grid slot stays occupied.
+        // NetPositionSize and RealizedPnl are cumulative — never reset here.
+        filledLevel.Status = GridLevelStatus.Pending;
+        filledLevel.OrderId = null;
+        filledLevel.PairedPrice = 0;
+        filledLevel.FilledAt = null;
+        filledLevel.PartialFilledSize = 0;
     }
 }
