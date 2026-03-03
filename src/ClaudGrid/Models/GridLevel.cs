@@ -42,6 +42,13 @@ public sealed class GridLevel
     /// <summary>Running profit accumulated at this level (realised on round-trip close).</summary>
     public decimal RealizedPnl { get; set; }
 
+    /// <summary>
+    /// Cumulative exchange position contribution from this level.
+    /// Decrements by Size on each sell fill, increments on each buy fill.
+    /// Matches the exchange's net position for this level at all times.
+    /// </summary>
+    public decimal NetPositionSize { get; set; }
+
     public override string ToString() =>
         $"Level[{Index}] {Side} @ {Price:F2} — {Status}";
 }

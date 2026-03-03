@@ -194,9 +194,7 @@ public sealed class GridBot : BackgroundService
 
     private void VerifyPositions(AccountState account)
     {
-        decimal expectedNet = _strategy.Levels
-            .Where(l => l.Status == Models.GridLevelStatus.Filled)
-            .Sum(l => l.Side == Models.GridLevelSide.Buy ? l.Size : -l.Size);
+        decimal expectedNet = _strategy.Levels.Sum(l => l.NetPositionSize);
 
         decimal actualNet = account.Positions
             .Where(p => p.Symbol == _config.Grid.Symbol)

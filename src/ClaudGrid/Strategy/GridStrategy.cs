@@ -237,6 +237,7 @@ public sealed class GridStrategy
         level.OrderId = null;
         level.PairedPrice = 0;
         level.FilledAt = null;
+        level.NetPositionSize = 0;
         _logger.LogInformation("Manually closed fill pair at level {Index} ({Side} @ {Price:F0}), PnL: {Pnl:F4}", index, level.Side, level.Price, fillPnl);
         return true;
     }
@@ -259,6 +260,9 @@ public sealed class GridStrategy
     {
         filledLevel.Status = GridLevelStatus.Filled;
         filledLevel.FilledAt = DateTime.UtcNow;
+        filledLevel.NetPositionSize += filledLevel.Side == GridLevelSide.Sell
+            ? -filledLevel.Size
+            : filledLevel.Size;
 
         _logger.LogInformation("Fill detected: {Side} @ {Price:F2} (level {Index})",
             filledLevel.Side, filledLevel.Price, filledLevel.Index);
