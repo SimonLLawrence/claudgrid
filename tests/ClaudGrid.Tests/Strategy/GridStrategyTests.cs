@@ -175,16 +175,15 @@ public sealed class GridStrategyTests
         var (strategy, exchange) = CreateSut();
         await strategy.InitialiseAsync(10_000m);
 
-        // Fill the first Active Sell → counter Buy placed at index-1
+        // Fill the first Active Sell → counter Buy placed, tracked on sell.PendingCounters
         GridLevel sell = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Sell);
         exchange.SimulateFill(sell.OrderId!.Value);
         await strategy.SyncAsync();
         strategy.DrainNewFills();
 
-        // Fill that counter Buy → round-trip closes, PnL realised
-        GridLevel counterBuy = strategy.Levels[sell.Index - 1];
-        Assert.Equal(GridLevelSide.Buy, counterBuy.Side);
-        exchange.SimulateFill(counterBuy.OrderId!.Value);
+        // Fill the counter Buy → round-trip closes, PnL realised
+        Assert.NotEmpty(sell.PendingCounters);
+        exchange.SimulateFill(sell.PendingCounters[0].OrderId);
         await strategy.SyncAsync();
 
         Assert.True(strategy.RealizedPnl > 0m,
@@ -230,8 +229,8 @@ public sealed class GridStrategyTests
         await strategy.SyncAsync();
         strategy.DrainNewFills();
 
-        GridLevel counterBuy = strategy.Levels[sell.Index - 1];
-        exchange.SimulateFill(counterBuy.OrderId!.Value);
+        Assert.NotEmpty(sell.PendingCounters);
+        exchange.SimulateFill(sell.PendingCounters[0].OrderId);
         await strategy.SyncAsync();
 
         Assert.Equal(0m, strategy.TrackedNetPosition);
@@ -265,12 +264,11 @@ public sealed class GridStrategyTests
         await strategy.SyncAsync();
         strategy.DrainNewFills();
 
-        GridLevel counterBuy = strategy.Levels[sell.Index - 1];
-        exchange.SimulateFill(counterBuy.OrderId!.Value);
+        Assert.NotEmpty(sell.PendingCounters);
+        exchange.SimulateFill(sell.PendingCounters[0].OrderId);
         await strategy.SyncAsync();
 
         Assert.Equal(0m, sell.NetPositionSize);
-        Assert.Equal(0m, counterBuy.NetPositionSize);
     }
 
     // ── DrainNewFills ─────────────────────────────────────────────────────────
@@ -317,8 +315,8 @@ public sealed class GridStrategyTests
         await strategy.SyncAsync();
         strategy.DrainNewFills();
 
-        GridLevel counterBuy = strategy.Levels[sell.Index - 1];
-        exchange.SimulateFill(counterBuy.OrderId!.Value);
+        Assert.NotEmpty(sell.PendingCounters);
+        exchange.SimulateFill(sell.PendingCounters[0].OrderId);
         await strategy.SyncAsync();
 
         var fills = strategy.DrainNewFills();
@@ -441,7 +439,7 @@ public sealed class GridStrategyTests
         exchange.ClosePartialFillPrice = 51_000m;
         await strategy.InitialiseAsync(10_000m);
 
-        // Fill the highest Buy (closest to mid) so its counter is placed at a fresh Initial level
+        // Fill the highest Buy (closest to mid) so its counter sell is tracked in buy.PendingCounters
         GridLevel buy = strategy.Levels.Last(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
         exchange.SimulateFill(buy.OrderId!.Value);
         await strategy.SyncAsync();

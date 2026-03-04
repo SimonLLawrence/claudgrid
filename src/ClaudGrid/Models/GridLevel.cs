@@ -10,6 +10,9 @@ public enum GridLevelStatus
     Filled,       // Order fully filled; off the exchange
 }
 
+/// <summary>Counter order placed against one fill increment on this level.</summary>
+public sealed record PendingCounter(long OrderId, decimal Size);
+
 /// <summary>Represents one level in the grid.</summary>
 public sealed class GridLevel
 {
@@ -32,12 +35,11 @@ public sealed class GridLevel
     public decimal? FillPrice { get; set; }
 
     /// <summary>
-    /// Price of the paired order that opened this round-trip leg.
-    /// Set on the counter level when placing a counter-order so that when
-    /// this level fills it knows the entry price of the opposite side.
-    /// Zero means no paired entry — PnL cannot be realised yet.
+    /// Counter orders placed against fill increments on this level.
+    /// Each entry represents one counter order (supporting partial fills).
+    /// When all counters execute and Status == Filled, the level resets to Initial.
     /// </summary>
-    public decimal PairedPrice { get; set; }
+    public List<PendingCounter> PendingCounters { get; } = new();
 
     /// <summary>Running profit accumulated at this level (realised on round-trip close).</summary>
     public decimal RealizedPnl { get; set; }
