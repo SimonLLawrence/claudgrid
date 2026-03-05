@@ -56,4 +56,10 @@ public interface IExchangeClient
     /// Returns the actual average fill price, or 0 if the order was rejected/unfilled.
     /// </summary>
     Task<decimal> ClosePartialPositionAsync(string symbol, int assetIndex, OrderSide closeSide, decimal size, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns all fill events for the given symbol with timestamps >= sinceMs (Unix milliseconds).
+    /// Used to distinguish order fills from cancellations: a missing order with no fill entry was cancelled.
+    /// </summary>
+    Task<List<UserFill>> GetUserFillsSinceAsync(string symbol, long sinceMs, CancellationToken ct = default);
 }

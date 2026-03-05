@@ -122,16 +122,33 @@ public IReadOnlyList<GridLevel> Levels => _levels;
 
     // ── Sync cycle ────────────────────────────────────────────────────────────
 
+    // How far back to look for fill events. Generous enough to cover any API latency while
+    // remaining far smaller than the shortest realistic order lifetime.
+    private const long FillLookbackMs = 120_000; // 2 minutes
+
     /// <summary>
     /// Called on each periodic tick. Detects fills, places counter orders, and
     /// checks whether pending counter orders have executed.
     /// Also places any levels that are in Initial state (failed/skipped placement).
+    ///
+    /// Fill vs. cancellation: fetches confirmed fills from the exchange BEFORE inspecting
+    /// disappeared orders. An order that vanished without a matching fill entry was cancelled
+    /// and is simply re-queued — no position update, no spurious counter order.
     /// </summary>
     public async Task SyncAsync(CancellationToken ct = default)
     {
         if (!_isInitialised) return;
 
         _newlyPlacedThisCycle.Clear();
+
+        // Fetch fills first — used to distinguish fills from cancellations.
+        // This is a transient, bounded dictionary (only fills in the last 2 minutes).
+        long sinceMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - FillLookbackMs;
+        var recentFills = await _exchange.GetUserFillsSinceAsync(_config.Grid.Symbol, sinceMs, ct);
+        // Sum fill sizes per order ID (multiple fill events can occur for partial fills).
+        var filledSizes = recentFills
+            .GroupBy(f => f.OrderId)
+            .ToDictionary(g => g.Key, g => g.Sum(f => f.Size));
 
         List<Order> liveOrders = await _exchange.GetOpenOrdersAsync(ct);
         Dictionary<long, Order> liveById = liveOrders.ToDictionary(o => o.Id);
@@ -149,7 +166,25 @@ public IReadOnlyList<GridLevel> Levels => _levels;
         {
             if (!liveById.TryGetValue(orderId, out var liveOrder))
             {
-                await HandleMainFillAsync(level, ct);
+                // Order has left the exchange — check fills to determine why.
+                decimal totalFilled = filledSizes.GetValueOrDefault(orderId, 0m);
+                decimal newFill = totalFilled - level.PartialFilledSize;
+
+                if (newFill > 0)
+                {
+                    bool isFullFill = totalFilled >= level.Size;
+                    await HandleMainFillAsync(level, newFill, isFullFill, ct);
+                }
+                else
+                {
+                    // No confirmed fill — order was cancelled. Re-queue without touching position.
+                    _logger.LogInformation(
+                        "Order cancelled (no fill): {Side} @ {Price:F2} oid={OId} (level {Index}) — re-queuing",
+                        level.Side, level.Price, orderId, level.Index);
+                    level.OrderId = null;
+                    level.Status = GridLevelStatus.Initial;
+                    level.PartialFilledSize = 0;
+                }
             }
             else if (liveOrder.FilledSize > level.PartialFilledSize)
             {
@@ -161,23 +196,23 @@ public IReadOnlyList<GridLevel> Levels => _levels;
 
         // Check whether any pending counter orders have executed
         foreach (var level in _levels.Where(l => l.PendingCounters.Count > 0).ToList())
-            CheckCounterOrders(level, liveById);
+            CheckCounterOrders(level, liveById, filledSizes);
 
-        // Re-place any Initial levels (failed placements, mid-adjacent skips, or re-queued after fill)
+        // Re-place any Initial levels (failed placements, mid-adjacent skips, or re-queued after fill/cancel)
         await PlaceInitialOrdersRetryAsync(ct);
 
-        // Retry counter placement for Filled levels whose counter failed to place last cycle.
-        // Without this, a placement failure leaves the level stuck in Filled forever.
+        // Retry counter placement for Filled levels whose counter failed to place or was cancelled.
+        // Without this, a placement failure or counter cancellation leaves the level stuck in Filled forever.
         foreach (var level in _levels.Where(l => l.Status == GridLevelStatus.Filled && l.PendingCounters.Count == 0).ToList())
         {
             _logger.LogWarning("Retrying counter for stuck Filled level {Index} {Side} @ {Price:F2}", level.Index, level.Side, level.Price);
-            decimal remaining = level.Size; // full size — partial tracking already settled
+            decimal remaining = level.Size;
             await PlaceCounterOrderAsync(level, remaining, ct);
         }
 
-        // ── Two-way order reconciliation ──────────────────────────────────────
+        // ── Orphaned order check (exchange → bot) ─────────────────────────────
+        // Detect orders on the exchange that the bot has no record of.
 
-        // Build the set of all bot-tracked order IDs (main + counters)
         var botOrderIds = new HashSet<long>();
         foreach (var level in _levels)
         {
@@ -188,7 +223,6 @@ public IReadOnlyList<GridLevel> Levels => _levels;
                 botOrderIds.Add(counter.OrderId);
         }
 
-        // 1. Exchange → bot: orphaned exchange orders the bot doesn't know about
         foreach (var order in liveById.Values)
         {
             if (!botOrderIds.Contains(order.Id))
@@ -198,22 +232,6 @@ public IReadOnlyList<GridLevel> Levels => _levels;
                     order.Id, order.Side, order.Price);
                 _pendingMismatches.Enqueue(
                     $"Orphaned order oid={order.Id} {order.Side} @ {order.Price:F2} not tracked by bot");
-            }
-        }
-
-        // 2. Bot → exchange: bot thinks an order is active but it's gone from the exchange
-        foreach (var level in _levels)
-        {
-            if ((level.Status == GridLevelStatus.Active || level.Status == GridLevelStatus.PartialFill)
-                && level.OrderId.HasValue
-                && !_newlyPlacedThisCycle.Contains(level.OrderId.Value)
-                && !liveById.ContainsKey(level.OrderId.Value))
-            {
-                _logger.LogError(
-                    "STATE MISMATCH — bot level {Index} {Side} @ {Price:F2} (oid={Id}) not found on exchange",
-                    level.Index, level.Side, level.Price, level.OrderId.Value);
-                _pendingMismatches.Enqueue(
-                    $"Missing order: level {level.Index} {level.Side} @ {level.Price:F2} (oid={level.OrderId}) not on exchange");
             }
         }
     }
@@ -285,28 +303,40 @@ public IReadOnlyList<GridLevel> Levels => _levels;
     }
 
     /// <summary>
-    /// Handles the final fill of a main order (order has disappeared from the exchange).
-    /// Places a counter order for the remaining unfilled size and records the fill.
+    /// Handles a confirmed fill for a main order that has disappeared from the exchange.
+    /// fillSize is the exchange-confirmed amount (may be less than level.Size if the order
+    /// was partially filled before being cancelled). isFullFill indicates whether the order
+    /// was completely consumed; if false the level resets to Initial for re-placement.
     /// </summary>
-    private async Task HandleMainFillAsync(GridLevel level, CancellationToken ct)
+    private async Task HandleMainFillAsync(GridLevel level, decimal fillSize, bool isFullFill, CancellationToken ct)
     {
-        decimal remaining = level.Size - level.PartialFilledSize;
-        decimal positionDelta = level.Side == GridLevelSide.Sell ? -remaining : remaining;
+        decimal positionDelta = level.Side == GridLevelSide.Sell ? -fillSize : fillSize;
         level.NetPositionSize += positionDelta;
         _trackedNetPosition += positionDelta;
 
         level.PartialFilledSize = 0;
         level.OrderId = null;
-        level.Status = GridLevelStatus.Filled;
-        level.FilledAt = DateTime.UtcNow;
 
-        _logger.LogInformation("Fill: {Side} @ {Price:F2} (level {Index})",
-            level.Side, level.Price, level.Index);
+        if (isFullFill)
+        {
+            level.Status = GridLevelStatus.Filled;
+            level.FilledAt = DateTime.UtcNow;
+            _logger.LogInformation("Fill: {Side} @ {Price:F2} (level {Index})",
+                level.Side, level.Price, level.Index);
+        }
+        else
+        {
+            // Order partially filled then cancelled — re-place for the full size next sync.
+            level.Status = GridLevelStatus.Initial;
+            _logger.LogInformation(
+                "Partial fill before cancel: {Side} @ {Price:F2} (level {Index}, confirmed {Size:F4}) — re-queuing",
+                level.Side, level.Price, level.Index, fillSize);
+        }
 
-        await PlaceCounterOrderAsync(level, remaining, ct);
+        await PlaceCounterOrderAsync(level, fillSize, ct);
 
         _pendingFills.Enqueue(new FillRecord(
-            DateTime.UtcNow, level.Side.ToString(), level.Price, remaining, 0m, false));
+            DateTime.UtcNow, level.Side.ToString(), level.Price, fillSize, 0m, false));
     }
 
     /// <summary>
@@ -363,26 +393,38 @@ public IReadOnlyList<GridLevel> Levels => _levels;
     }
 
     /// <summary>
-    /// Checks whether any pending counter orders for this level have executed.
-    /// Adjusts position tracking, computes PnL, and resets the level when fully settled.
+    /// Checks whether any pending counter orders for this level have executed or been cancelled.
+    /// Executed counters: adjust position, compute PnL.
+    /// Cancelled counters: remove without position update; the stuck-Filled retry loop re-places them.
+    /// Resets the level to Initial when fully settled.
     /// </summary>
-    private void CheckCounterOrders(GridLevel level, Dictionary<long, Order> liveById)
+    private void CheckCounterOrders(GridLevel level, Dictionary<long, Order> liveById, Dictionary<long, decimal> filledSizes)
     {
-        var executed = level.PendingCounters
+        var missing = level.PendingCounters
             .Where(c => !liveById.ContainsKey(c.OrderId) && !_newlyPlacedThisCycle.Contains(c.OrderId))
             .ToList();
 
-        if (executed.Count == 0) return;
+        if (missing.Count == 0) return;
 
         int counterIndex = level.Side == GridLevelSide.Buy ? level.Index + 1 : level.Index - 1;
         decimal counterPrice = (counterIndex >= 0 && counterIndex < _levels.Count)
             ? _levels[counterIndex].Price
             : 0m;
 
-        foreach (var counter in executed)
+        foreach (var counter in missing)
         {
-            // Counter reverses the position: sell counter reduces long, buy counter reduces short
-            decimal positionDelta = level.Side == GridLevelSide.Buy ? -counter.Size : counter.Size;
+            if (!filledSizes.TryGetValue(counter.OrderId, out decimal fillSize))
+            {
+                // Counter was cancelled — remove it; the stuck-Filled retry will re-place.
+                _logger.LogWarning(
+                    "Counter oid={OId} for level {Index} {Side} was cancelled — will retry",
+                    counter.OrderId, level.Index, level.Side);
+                level.PendingCounters.Remove(counter);
+                continue;
+            }
+
+            // Counter confirmed filled.
+            decimal positionDelta = level.Side == GridLevelSide.Buy ? -fillSize : fillSize;
             level.NetPositionSize += positionDelta;
             _trackedNetPosition += positionDelta;
 
@@ -390,8 +432,8 @@ public IReadOnlyList<GridLevel> Levels => _levels;
             if (counterPrice > 0)
             {
                 pnl = level.Side == GridLevelSide.Buy
-                    ? (counterPrice - level.Price) * counter.Size   // bought low, sold high
-                    : (level.Price - counterPrice) * counter.Size;  // sold high, bought low
+                    ? (counterPrice - level.Price) * fillSize   // bought low, sold high
+                    : (level.Price - counterPrice) * fillSize;  // sold high, bought low
                 level.RealizedPnl += pnl;
             }
 
@@ -399,7 +441,7 @@ public IReadOnlyList<GridLevel> Levels => _levels;
                 DateTime.UtcNow,
                 level.Side == GridLevelSide.Buy ? "Sell" : "Buy",
                 counterPrice,
-                counter.Size,
+                fillSize,
                 pnl,
                 true));
 

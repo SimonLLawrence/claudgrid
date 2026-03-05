@@ -411,6 +411,83 @@ public sealed class GridStrategyTests
         Assert.Equal(buy.Size, strategy.TrackedNetPosition);
     }
 
+    // ── Cancellation handling ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task SyncAsync_CancelledOrder_DoesNotUpdatePosition()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel buy = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
+        long cancelledId = buy.OrderId!.Value;
+
+        // Cancel without recording a fill (just remove from open orders)
+        exchange.CancelOrder(cancelledId);
+        await strategy.SyncAsync();
+
+        // Position must not change — it was cancelled, not filled
+        Assert.Equal(0m, strategy.TrackedNetPosition);
+    }
+
+    [Fact]
+    public async Task SyncAsync_CancelledOrder_RequeuesLevel()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel buy = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
+        long cancelledId = buy.OrderId!.Value;
+        int ordersBeforeSync = exchange.PlacedOrders.Count;
+
+        exchange.CancelOrder(cancelledId);
+        await strategy.SyncAsync();
+
+        // Level should be re-placed on the same sync (Initial → Active via PlaceInitialOrdersRetryAsync)
+        Assert.Equal(GridLevelStatus.Active, buy.Status);
+        Assert.NotEqual(cancelledId, buy.OrderId); // new order ID
+        Assert.True(exchange.PlacedOrders.Count > ordersBeforeSync);
+    }
+
+    [Fact]
+    public async Task SyncAsync_CancelledOrder_ProducesNoFillRecord()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        GridLevel buy = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
+        exchange.CancelOrder(buy.OrderId!.Value);
+        await strategy.SyncAsync();
+
+        Assert.Empty(strategy.DrainNewFills());
+    }
+
+    [Fact]
+    public async Task SyncAsync_CancelledCounter_RetriesPlacement()
+    {
+        var (strategy, exchange) = CreateSut();
+        await strategy.InitialiseAsync(10_000m);
+
+        // Fill a sell level so a counter buy is placed
+        GridLevel sell = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Sell);
+        exchange.SimulateFill(sell.OrderId!.Value);
+        await strategy.SyncAsync();
+        strategy.DrainNewFills();
+
+        Assert.NotEmpty(sell.PendingCounters);
+        long counterOid = sell.PendingCounters[0].OrderId;
+
+        // Cancel the counter without recording a fill
+        exchange.CancelOrder(counterOid);
+        int ordersBeforeRetry = exchange.PlacedOrders.Count;
+        await strategy.SyncAsync();
+
+        // Position must not change from the cancelled counter
+        Assert.Equal(-sell.Size, strategy.TrackedNetPosition);
+        // A replacement counter should have been placed
+        Assert.True(exchange.PlacedOrders.Count > ordersBeforeRetry);
+    }
+
     // ── CloseLevelAsync ───────────────────────────────────────────────────────
 
     [Fact]

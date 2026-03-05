@@ -10,6 +10,7 @@ public sealed class MockExchangeClient : IExchangeClient
 {
     private long _nextOrderId = 1000;
     private readonly List<Order> _openOrders = new();
+    private readonly List<(long OrderId, long TimestampMs, decimal Size, decimal Price)> _recordedFills = new();
 
     // ── Configurable state ───────────────────────────────────────────────────
 
@@ -116,15 +117,45 @@ public sealed class MockExchangeClient : IExchangeClient
     public Task TransferSpotToPerpsAsync(decimal amount, CancellationToken ct = default) =>
         Task.CompletedTask;
 
-/// <summary>Simulates an order being filled by removing it from the open orders list.</summary>
+    public Task<List<UserFill>> GetUserFillsSinceAsync(string symbol, long sinceMs, CancellationToken ct = default)
+    {
+        var fills = _recordedFills
+            .Where(f => f.TimestampMs >= sinceMs)
+            .Select(f => new UserFill
+            {
+                OrderId = f.OrderId,
+                Symbol = symbol,
+                Side = OrderSide.Buy, // side not used by strategy for fill detection
+                Price = f.Price,
+                Size = f.Size,
+                TimestampMs = f.TimestampMs
+            })
+            .ToList();
+        return Task.FromResult(fills);
+    }
+
+    /// <summary>Simulates an order being filled: removes from open orders and records the fill.</summary>
     public void SimulateFill(long orderId)
     {
-        _openOrders.RemoveAll(o => o.Id == orderId);
+        var order = _openOrders.FirstOrDefault(o => o.Id == orderId);
+        if (order != null)
+        {
+            // Record total size as confirmed fill (strategy subtracts already-processed partial)
+            _recordedFills.Add((orderId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), order.Size, order.Price));
+            _openOrders.Remove(order);
+        }
+        else
+        {
+            _openOrders.RemoveAll(o => o.Id == orderId);
+        }
     }
 
     /// <summary>Simulates all open orders being filled.</summary>
     public void SimulateAllFilled()
     {
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        foreach (var order in _openOrders)
+            _recordedFills.Add((order.Id, now, order.Size, order.Price));
         _openOrders.Clear();
     }
 
@@ -138,6 +169,9 @@ public sealed class MockExchangeClient : IExchangeClient
         if (order != null)
             order.FilledSize = filledSize;
     }
+
+    /// <summary>Cancels an order without recording a fill (simulates exchange-side cancellation).</summary>
+    public void CancelOrder(long orderId) => _openOrders.RemoveAll(o => o.Id == orderId);
 
     /// <summary>Adds an arbitrary order to the open orders list (simulates an orphaned exchange order).</summary>
     public void InjectOpenOrder(Order order) => _openOrders.Add(order);
