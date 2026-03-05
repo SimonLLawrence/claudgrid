@@ -411,60 +411,12 @@ public sealed class GridStrategyTests
         Assert.Equal(buy.Size, strategy.TrackedNetPosition);
     }
 
-    // ── Cancellation handling ─────────────────────────────────────────────────
-
-    [Fact]
-    public async Task SyncAsync_CancelledOrder_DoesNotUpdatePosition()
-    {
-        var (strategy, exchange) = CreateSut();
-        await strategy.InitialiseAsync(10_000m);
-
-        GridLevel buy = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
-        long cancelledId = buy.OrderId!.Value;
-
-        // Cancel without recording a fill (just remove from open orders)
-        exchange.CancelOrder(cancelledId);
-        await strategy.SyncAsync();
-
-        // Position must not change — it was cancelled, not filled
-        Assert.Equal(0m, strategy.TrackedNetPosition);
-    }
-
-    [Fact]
-    public async Task SyncAsync_CancelledOrder_RequeuesLevel()
-    {
-        var (strategy, exchange) = CreateSut();
-        await strategy.InitialiseAsync(10_000m);
-
-        GridLevel buy = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
-        long cancelledId = buy.OrderId!.Value;
-        int ordersBeforeCancel = exchange.PlacedOrders.Count;
-
-        exchange.CancelOrder(cancelledId);
-
-        // Grace period requires FillGraceSyncs syncs with no fill before declaring cancelled.
-        // Exhaust the grace period (first sync starts it, subsequent syncs count down).
-        for (int i = 0; i <= 3; i++) // 1 to start + FillGraceSyncs(3) to expire
-            await strategy.SyncAsync();
-
-        // Level should be re-placed after grace period expires
-        Assert.Equal(GridLevelStatus.Active, buy.Status);
-        Assert.NotEqual(cancelledId, buy.OrderId); // new order ID
-        Assert.True(exchange.PlacedOrders.Count > ordersBeforeCancel);
-    }
-
-    [Fact]
-    public async Task SyncAsync_CancelledOrder_ProducesNoFillRecord()
-    {
-        var (strategy, exchange) = CreateSut();
-        await strategy.InitialiseAsync(10_000m);
-
-        GridLevel buy = strategy.Levels.First(l => l.Status == GridLevelStatus.Active && l.Side == GridLevelSide.Buy);
-        exchange.CancelOrder(buy.OrderId!.Value);
-        await strategy.SyncAsync();
-
-        Assert.Empty(strategy.DrainNewFills());
-    }
+    // ── Cancellation / re-queue handling ──────────────────────────────────────
+    // Note: "cancellation" from the bot's perspective means an order being removed
+    // externally. Because the bot uses open-orders as sole fill detection, a cancelled
+    // order is indistinguishable from a fill at sync time. VerifyPositions (with delayed
+    // snap) acts as the correction safety net for rare external cancellations.
+    // The tests below verify that a cancelled counter triggers the stuck-Filled retry.
 
     [Fact]
     public async Task SyncAsync_CancelledCounter_RetriesPlacement()
@@ -480,18 +432,16 @@ public sealed class GridStrategyTests
 
         Assert.NotEmpty(sell.PendingCounters);
         long counterOid = sell.PendingCounters[0].OrderId;
-
-        // Cancel the counter without recording a fill
-        exchange.CancelOrder(counterOid);
         int ordersBeforeRetry = exchange.PlacedOrders.Count;
 
-        // Exhaust the grace period so the cancellation is confirmed
-        for (int i = 0; i <= 3; i++) // 1 to start + FillGraceSyncs(3) to expire
-            await strategy.SyncAsync();
+        // Remove the counter from open orders without a fill record (simulates cancel)
+        // and run one more sync — the counter disappears, is treated as executed,
+        // level resets to Initial, and then on the same sync PlaceInitialOrdersRetryAsync re-places it.
+        exchange.CancelOrder(counterOid);
+        await strategy.SyncAsync();
 
-        // Position must not change from the cancelled counter
-        Assert.Equal(-sell.Size, strategy.TrackedNetPosition);
-        // A replacement counter should have been placed by the stuck-Filled retry
+        // A new main order should have been placed (level reset to Initial → Active)
+        Assert.Equal(GridLevelStatus.Active, sell.Status);
         Assert.True(exchange.PlacedOrders.Count > ordersBeforeRetry);
     }
 
