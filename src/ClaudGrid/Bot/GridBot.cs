@@ -163,9 +163,6 @@ public sealed class GridBot : BackgroundService
                     foreach (var msg in _strategy.DrainMismatches())
                         _status.RecordMismatch(msg);
                     VerifyPositions(postSyncAccount);
-                    await _strategy.ReconcileWithExchangeFillsAsync(ct);
-                    foreach (var msg in _strategy.DrainMismatches())
-                        _status.RecordMismatch(msg);
                     LogPnlSummary();
                     break;
             }

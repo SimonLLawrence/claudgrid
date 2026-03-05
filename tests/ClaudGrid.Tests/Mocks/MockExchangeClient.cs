@@ -116,10 +116,7 @@ public sealed class MockExchangeClient : IExchangeClient
     public Task TransferSpotToPerpsAsync(decimal amount, CancellationToken ct = default) =>
         Task.CompletedTask;
 
-    public Task<List<UserFill>> GetUserFillsSinceAsync(string symbol, long startTimeMs, CancellationToken ct = default) =>
-        Task.FromResult(new List<UserFill>());
-
-    /// <summary>Simulates an order being filled by removing it from the open orders list.</summary>
+/// <summary>Simulates an order being filled by removing it from the open orders list.</summary>
     public void SimulateFill(long orderId)
     {
         _openOrders.RemoveAll(o => o.Id == orderId);

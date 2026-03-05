@@ -55,13 +55,7 @@ public sealed class GridStrategy
     /// </summary>
     private readonly HashSet<long> _newlyPlacedThisCycle = new();
 
-    /// <summary>
-    /// Epoch-ms cursor used by ReconcileWithExchangeFillsAsync.
-    /// Set to the bot start time; advances to the timestamp of the last processed fill.
-    /// </summary>
-    private long _fillCursorMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-    public IReadOnlyList<GridLevel> Levels => _levels;
+public IReadOnlyList<GridLevel> Levels => _levels;
     public decimal RealizedPnl => _levels.Sum(l => l.RealizedPnl);
     public bool IsInitialised => _isInitialised;
     public decimal TrackedNetPosition => _trackedNetPosition;
@@ -108,10 +102,9 @@ public sealed class GridStrategy
         if (closed > 0)
             _logger.LogInformation("Closed {Count} stale position(s) — starting flat", closed);
 
-        // All positions closed — reset the fill-derived position tracker and fill cursor
+        // All positions closed — reset the fill-derived position tracker
         _trackedNetPosition = 0;
         _newlyPlacedThisCycle.Clear();
-        _fillCursorMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         MarketData market = await _exchange.GetMarketDataAsync(_config.Grid.Symbol, ct);
         _logger.LogInformation("Grid anchor price: {Price:F2}", market.MidPrice);
@@ -496,49 +489,5 @@ public sealed class GridStrategy
         var list = new List<string>();
         while (_pendingMismatches.TryDequeue(out var m)) list.Add(m);
         return list;
-    }
-
-    /// <summary>
-    /// Fetches fills from the exchange since the last cursor and cross-checks them
-    /// against the bot's tracked order IDs. Any fill for an unknown order ID is logged
-    /// as a mismatch (phantom fill), giving early warning of untracked exchange activity.
-    /// Advances the cursor to the most recent fill time seen.
-    /// </summary>
-    public async Task ReconcileWithExchangeFillsAsync(CancellationToken ct = default)
-    {
-        List<UserFill> fills;
-        try
-        {
-            fills = await _exchange.GetUserFillsSinceAsync(_config.Grid.Symbol, _fillCursorMs, ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to fetch user fills for reconciliation");
-            return;
-        }
-
-        if (fills.Count == 0) return;
-
-        // Build the set of all order IDs the bot knows about (main + counters)
-        var knownOrderIds = new HashSet<long>();
-        foreach (var level in _levels)
-        {
-            if (level.OrderId.HasValue) knownOrderIds.Add(level.OrderId.Value);
-            foreach (var counter in level.PendingCounters)
-                knownOrderIds.Add(counter.OrderId);
-        }
-
-        foreach (var fill in fills)
-        {
-            if (!knownOrderIds.Contains(fill.OrderId))
-            {
-                string msg = $"Untracked fill: oid={fill.OrderId} {fill.Side} {fill.Size:F4} @ {fill.Price:F2}";
-                _logger.LogError("FILL RECONCILIATION — {Message}", msg);
-                _pendingMismatches.Enqueue(msg);
-            }
-
-            if (fill.TimestampMs > _fillCursorMs)
-                _fillCursorMs = fill.TimestampMs;
-        }
     }
 }
