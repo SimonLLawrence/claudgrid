@@ -32,6 +32,7 @@ public sealed class GridBot : BackgroundService
     private decimal _gridLower;
     private decimal _gridUpper;
     private int _syncCount;
+    private int _consecutiveMismatchCount;
 
     public GridBot(
         IExchangeClient exchange,
@@ -195,6 +196,12 @@ public sealed class GridBot : BackgroundService
             "Grid bounds updated: [{Lower:F2}, {Upper:F2}]", _gridLower, _gridUpper);
     }
 
+    // Number of consecutive syncs with a position mismatch before the tracker is snapped.
+    // Mismatches caused by fills landing in the gap between SyncAsync and GetAccountStateAsync
+    // self-correct on the next sync without any intervention. Only snap for persistent
+    // divergence that doesn't resolve on its own (genuine state corruption).
+    private const int MismatchSnapThreshold = 5;
+
     private void VerifyPositions(AccountState account)
     {
         decimal expectedNet = _strategy.TrackedNetPosition;
@@ -205,12 +212,30 @@ public sealed class GridBot : BackgroundService
 
         if (Math.Abs(expectedNet - actualNet) > 0.0001m)
         {
-            _logger.LogError(
-                "STATE MISMATCH — position: bot expects {Expected:F4} {Symbol} net, exchange shows {Actual:F4}. Correcting tracker.",
-                expectedNet, _config.Grid.Symbol, actualNet);
-            _status.RecordMismatch(
-                $"Position mismatch: bot expects {expectedNet:F4} {_config.Grid.Symbol}, exchange shows {actualNet:F4} — auto-corrected");
-            _strategy.SnapTrackedPosition(actualNet);
+            _consecutiveMismatchCount++;
+            string msg = $"Position mismatch: bot expects {expectedNet:F4} {_config.Grid.Symbol}, exchange shows {actualNet:F4}";
+
+            if (_consecutiveMismatchCount >= MismatchSnapThreshold)
+            {
+                _logger.LogError(
+                    "Persistent mismatch after {N} syncs — auto-correcting tracker. {Msg}",
+                    MismatchSnapThreshold, msg);
+                _status.RecordMismatch(msg + " — auto-corrected");
+                _strategy.SnapTrackedPosition(actualNet);
+                _consecutiveMismatchCount = 0;
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Transient mismatch #{Count}/{Threshold}: {Msg}",
+                    _consecutiveMismatchCount, MismatchSnapThreshold, msg);
+                // Do not snap — a fill that landed between SyncAsync and this account fetch
+                // will be picked up by the fills API on the next sync cycle and self-correct.
+            }
+        }
+        else
+        {
+            _consecutiveMismatchCount = 0;
         }
     }
 

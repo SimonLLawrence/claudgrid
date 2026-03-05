@@ -104,7 +104,9 @@ public IReadOnlyList<GridLevel> Levels => _levels;
 
         // All positions closed — reset the fill-derived position tracker
         _trackedNetPosition = 0;
+        _syncNumber = 0;
         _newlyPlacedThisCycle.Clear();
+        _ordersAwaitingConfirmation.Clear();
 
         MarketData market = await _exchange.GetMarketDataAsync(_config.Grid.Symbol, ct);
         _logger.LogInformation("Grid anchor price: {Price:F2}", market.MidPrice);
@@ -122,9 +124,22 @@ public IReadOnlyList<GridLevel> Levels => _levels;
 
     // ── Sync cycle ────────────────────────────────────────────────────────────
 
-    // How far back to look for fill events. Generous enough to cover any API latency while
-    // remaining far smaller than the shortest realistic order lifetime.
+    // How far back to look for fill events.
     private const long FillLookbackMs = 120_000; // 2 minutes
+
+    // How many sync cycles to wait before declaring a missing order as cancelled when the
+    // fills API has not yet returned a matching fill. Protects against fill API propagation
+    // latency (typically < 5 s) and the race condition where a fill happens after the fills
+    // API call but before GetOpenOrdersAsync completes.
+    private const int FillGraceSyncs = 3;
+
+    private int _syncNumber;
+
+    // Orders that have disappeared from open orders but whose fill has not yet been confirmed
+    // by the fills API. Maps orderId → syncNumber when first noticed missing.
+    // Entries are removed once a fill is confirmed or the grace period expires.
+    // Bounded: at most ~(active levels + pending counters) entries at any time.
+    private readonly Dictionary<long, int> _ordersAwaitingConfirmation = new();
 
     /// <summary>
     /// Called on each periodic tick. Detects fills, places counter orders, and
@@ -139,6 +154,7 @@ public IReadOnlyList<GridLevel> Levels => _levels;
     {
         if (!_isInitialised) return;
 
+        _syncNumber++;
         _newlyPlacedThisCycle.Clear();
 
         // Fetch fills first — used to distinguish fills from cancellations.
@@ -172,18 +188,32 @@ public IReadOnlyList<GridLevel> Levels => _levels;
 
                 if (newFill > 0)
                 {
+                    // Fill confirmed — process it.
+                    _ordersAwaitingConfirmation.Remove(orderId);
                     bool isFullFill = totalFilled >= level.Size;
                     await HandleMainFillAsync(level, newFill, isFullFill, ct);
                 }
                 else
                 {
-                    // No confirmed fill — order was cancelled. Re-queue without touching position.
-                    _logger.LogInformation(
-                        "Order cancelled (no fill): {Side} @ {Price:F2} oid={OId} (level {Index}) — re-queuing",
-                        level.Side, level.Price, orderId, level.Index);
-                    level.OrderId = null;
-                    level.Status = GridLevelStatus.Initial;
-                    level.PartialFilledSize = 0;
+                    // No fill found yet. The fills API may lag the open-orders API by a few
+                    // seconds. Apply a grace period before treating the order as cancelled.
+                    if (!_ordersAwaitingConfirmation.TryGetValue(orderId, out int firstMissingSync))
+                    {
+                        _ordersAwaitingConfirmation[orderId] = _syncNumber;
+                        // First time seeing this order missing — wait for fills API to catch up.
+                    }
+                    else if (_syncNumber - firstMissingSync >= FillGraceSyncs)
+                    {
+                        // Grace period exhausted — no fill found. Order was cancelled.
+                        _ordersAwaitingConfirmation.Remove(orderId);
+                        _logger.LogInformation(
+                            "Order cancelled (no fill after {N} syncs): {Side} @ {Price:F2} oid={OId} (level {Index}) — re-queuing",
+                            FillGraceSyncs, level.Side, level.Price, orderId, level.Index);
+                        level.OrderId = null;
+                        level.Status = GridLevelStatus.Initial;
+                        level.PartialFilledSize = 0;
+                    }
+                    // else: still within grace period — do nothing, recheck next sync.
                 }
             }
             else if (liveOrder.FilledSize > level.PartialFilledSize)
@@ -415,13 +445,25 @@ public IReadOnlyList<GridLevel> Levels => _levels;
         {
             if (!filledSizes.TryGetValue(counter.OrderId, out decimal fillSize))
             {
-                // Counter was cancelled — remove it; the stuck-Filled retry will re-place.
-                _logger.LogWarning(
-                    "Counter oid={OId} for level {Index} {Side} was cancelled — will retry",
-                    counter.OrderId, level.Index, level.Side);
-                level.PendingCounters.Remove(counter);
+                // No fill found yet — apply the same grace period as for main orders.
+                if (!_ordersAwaitingConfirmation.TryGetValue(counter.OrderId, out int firstMissingSync))
+                {
+                    _ordersAwaitingConfirmation[counter.OrderId] = _syncNumber;
+                    // First time seeing this counter missing — wait.
+                }
+                else if (_syncNumber - firstMissingSync >= FillGraceSyncs)
+                {
+                    // Grace period exhausted — counter was cancelled; retry via stuck-Filled loop.
+                    _ordersAwaitingConfirmation.Remove(counter.OrderId);
+                    _logger.LogWarning(
+                        "Counter oid={OId} for level {Index} {Side} cancelled after {N} syncs — will retry",
+                        counter.OrderId, level.Index, level.Side, FillGraceSyncs);
+                    level.PendingCounters.Remove(counter);
+                }
+                // else: still within grace period — do nothing.
                 continue;
             }
+            _ordersAwaitingConfirmation.Remove(counter.OrderId);
 
             // Counter confirmed filled.
             decimal positionDelta = level.Side == GridLevelSide.Buy ? -fillSize : fillSize;
