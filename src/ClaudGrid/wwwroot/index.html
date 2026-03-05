@@ -568,8 +568,13 @@
       const closeBtn = (l.status === 'Filled' && hasRealPos)
         ? `<td><button class="btn-close" onclick="closeLevel(${l.index}, this)">Close</button></td>`
         : `<td></td>`;
-      const exchCell = l.hasExchangeOrder
+      const ctrCount = l.pendingCounterCount || 0;
+      const exchCell = l.hasExchangeOrder && ctrCount > 0
+        ? `<td style="color:#3fb950">Yes <span style="color:#d29922;font-size:10px">+${ctrCount}ctr</span></td>`
+        : l.hasExchangeOrder
         ? `<td style="color:#3fb950">Yes</td>`
+        : ctrCount > 0
+        ? `<td style="color:#d29922">${ctrCount} ctr</td>`
         : `<td style="color:#6e7681">—</td>`;
       return `<tr>
         <td>${l.index}</td>
