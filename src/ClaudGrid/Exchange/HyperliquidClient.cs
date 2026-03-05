@@ -332,6 +332,35 @@ public sealed class HyperliquidClient : IExchangeClient
         throw new InvalidOperationException($"Symbol '{symbol}' not found in Hyperliquid meta");
     }
 
+    public async Task<List<UserFill>> GetUserFillsSinceAsync(string symbol, long startTimeMs, CancellationToken ct = default)
+    {
+        string json = await PostInfoAsync(
+            new { type = "userFillsByTime", user = _config.WalletAddress, startTime = startTimeMs, aggregateByTime = false },
+            ct);
+
+        var arr = JsonNode.Parse(json)?.AsArray() ?? new System.Text.Json.Nodes.JsonArray();
+        var fills = new List<UserFill>();
+
+        foreach (var f in arr)
+        {
+            if (f == null) continue;
+            string coin = f["coin"]?.GetValue<string>() ?? "";
+            if (coin != symbol) continue;
+
+            fills.Add(new UserFill
+            {
+                OrderId     = f["oid"]?.GetValue<long>() ?? 0,
+                Symbol      = coin,
+                Side        = (f["side"]?.GetValue<string>() ?? "B") == "B" ? OrderSide.Buy : OrderSide.Sell,
+                Price       = ParseDecimal(f["px"]),
+                Size        = ParseDecimal(f["sz"]),
+                TimestampMs = f["time"]?.GetValue<long>() ?? 0
+            });
+        }
+
+        return fills;
+    }
+
     public async Task<decimal> GetSpotUsdcBalanceAsync(CancellationToken ct = default)
     {
         string json = await PostInfoAsync(new { type = "spotClearinghouseState", user = _config.WalletAddress }, ct);

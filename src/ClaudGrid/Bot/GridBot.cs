@@ -163,6 +163,9 @@ public sealed class GridBot : BackgroundService
                     foreach (var msg in _strategy.DrainMismatches())
                         _status.RecordMismatch(msg);
                     VerifyPositions(postSyncAccount);
+                    await _strategy.ReconcileWithExchangeFillsAsync(ct);
+                    foreach (var msg in _strategy.DrainMismatches())
+                        _status.RecordMismatch(msg);
                     LogPnlSummary();
                     break;
             }
@@ -197,7 +200,6 @@ public sealed class GridBot : BackgroundService
 
     private void VerifyPositions(AccountState account)
     {
-        // Expected position = running sum of all fill events (+buy, −sell)
         decimal expectedNet = _strategy.TrackedNetPosition;
 
         decimal actualNet = account.Positions
@@ -207,10 +209,11 @@ public sealed class GridBot : BackgroundService
         if (Math.Abs(expectedNet - actualNet) > 0.0001m)
         {
             _logger.LogError(
-                "STATE MISMATCH — position: bot expects {Expected:F4} {Symbol} net, exchange shows {Actual:F4}",
+                "STATE MISMATCH — position: bot expects {Expected:F4} {Symbol} net, exchange shows {Actual:F4}. Correcting tracker.",
                 expectedNet, _config.Grid.Symbol, actualNet);
             _status.RecordMismatch(
-                $"Position mismatch: bot expects {expectedNet:F4} {_config.Grid.Symbol}, exchange shows {actualNet:F4}");
+                $"Position mismatch: bot expects {expectedNet:F4} {_config.Grid.Symbol}, exchange shows {actualNet:F4} — auto-corrected");
+            _strategy.SnapTrackedPosition(actualNet);
         }
     }
 

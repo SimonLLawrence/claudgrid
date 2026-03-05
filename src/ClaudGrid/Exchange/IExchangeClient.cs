@@ -56,4 +56,10 @@ public interface IExchangeClient
     /// Returns the actual average fill price, or 0 if the order was rejected/unfilled.
     /// </summary>
     Task<decimal> ClosePartialPositionAsync(string symbol, int assetIndex, OrderSide closeSide, decimal size, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns all fills for the configured wallet with timestamps >= startTimeMs.
+    /// Used for position reconciliation: provides ground truth independent of open-order inference.
+    /// </summary>
+    Task<List<UserFill>> GetUserFillsSinceAsync(string symbol, long startTimeMs, CancellationToken ct = default);
 }
