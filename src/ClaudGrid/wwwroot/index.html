@@ -209,6 +209,68 @@
     /* ── Tab panels ── */
     #tab-dashboard { flex: 1; display: flex; flex-direction: column; min-height: 0; }
     #tab-config    { flex: 1; display: none; flex-direction: column; overflow-y: auto; }
+    #tab-wallet    { flex: 1; display: none; flex-direction: column; overflow-y: auto; }
+
+    /* ── Wallet tab ── */
+    .wallet-body { padding: 28px 32px; display: flex; gap: 40px; flex-wrap: wrap; }
+    .wallet-section { flex: 1; min-width: 300px; max-width: 560px; }
+    .wallet-section h4 {
+      font-size: 11px; color: #8b949e; text-transform: uppercase;
+      letter-spacing: 0.5px; margin-bottom: 16px; padding-bottom: 6px;
+      border-bottom: 1px solid #21262d;
+    }
+    .wallet-info-grid {
+      display: grid; grid-template-columns: 140px 1fr; gap: 10px 12px; align-items: center;
+    }
+    .wallet-info-grid .wi-label { font-size: 12px; color: #8b949e; }
+    .wallet-info-grid .wi-value { font-size: 12px; color: #e6edf3; font-family: monospace; word-break: break-all; }
+    .wi-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: bold;
+    }
+    .wi-badge-mainnet { background: #1a4731; color: #3fb950; }
+    .wi-badge-testnet { background: #3d2a00; color: #d29922; }
+    .wallet-form { display: flex; flex-direction: column; gap: 10px; }
+    .wallet-form label { font-size: 12px; color: #8b949e; margin-bottom: 2px; display: block; }
+    .wallet-input-row { display: flex; gap: 8px; align-items: center; }
+    .wallet-input-row input {
+      flex: 1; background: #21262d; border: 1px solid #30363d; border-radius: 6px;
+      color: #e6edf3; font-size: 12px; font-family: monospace; padding: 7px 10px;
+    }
+    .wallet-input-row input:focus { outline: none; border-color: #58a6ff; }
+    .btn-wallet {
+      background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+      border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; white-space: nowrap;
+    }
+    .btn-wallet:hover { background: #2d333b; border-color: #58a6ff; color: #e6edf3; }
+    .btn-wallet:disabled { opacity: 0.4; cursor: default; }
+    .btn-wallet-primary {
+      background: #1a4731; color: #3fb950; border: 1px solid #3fb950;
+      border-radius: 6px; padding: 7px 20px; font-size: 13px; cursor: pointer;
+    }
+    .btn-wallet-primary:hover { background: #1f5c3b; }
+    .btn-wallet-primary:disabled { opacity: 0.5; cursor: default; }
+    .btn-wallet-danger {
+      background: #1a1a1a; color: #f85149; border: 1px solid #f85149;
+      border-radius: 6px; padding: 7px 20px; font-size: 13px; cursor: pointer;
+    }
+    .btn-wallet-danger:hover { background: #3d1a1a; }
+    .wallet-actions { display: flex; align-items: center; gap: 12px; margin-top: 6px; flex-wrap: wrap; }
+    .wallet-msg { font-size: 12px; margin-top: 2px; }
+    .wallet-generated {
+      margin-top: 20px; padding: 16px; background: #0d2b1a; border: 1px solid #2ea043;
+      border-radius: 8px; display: none; flex-direction: column; gap: 10px;
+    }
+    .wallet-generated.visible { display: flex; }
+    .wallet-generated-warn { font-size: 12px; color: #d29922; font-weight: bold; }
+    .wallet-generated-row { display: flex; flex-direction: column; gap: 4px; }
+    .wallet-generated-row label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.4px; }
+    .wallet-generated-val {
+      font-family: monospace; font-size: 12px; background: #161b22; border: 1px solid #21262d;
+      border-radius: 5px; padding: 7px 10px; word-break: break-all; color: #e6edf3; cursor: pointer;
+      user-select: all;
+    }
+    .wallet-generated-val:hover { border-color: #58a6ff; }
+    .wallet-generated-btns { display: flex; gap: 8px; flex-wrap: wrap; }
 
     /* ── Config form ── */
     .config-body {
@@ -335,6 +397,7 @@
 <div class="tab-bar">
   <button class="tab-btn tab-active" data-tab="dashboard" onclick="showTab('dashboard')">Dashboard<span id="tab-mismatch-badge" class="tab-mismatch-badge hidden"></span></button>
   <button class="tab-btn" data-tab="config" onclick="showTab('config')">Configuration</button>
+  <button class="tab-btn" data-tab="wallet" onclick="showTab('wallet')">Wallet</button>
 </div>
 
 <div id="tab-dashboard">
@@ -420,6 +483,68 @@
     <span id="config-msg"></span>
   </div>
 </div><!-- #tab-config -->
+
+<div id="tab-wallet">
+  <div class="wallet-body">
+
+    <!-- Current wallet -->
+    <div class="wallet-section">
+      <h4>Current Wallet</h4>
+      <div class="wallet-info-grid">
+        <span class="wi-label">Address</span>
+        <span class="wi-value" id="wi-address">—</span>
+        <span class="wi-label">Private Key</span>
+        <span class="wi-value" id="wi-key">—</span>
+        <span class="wi-label">Network</span>
+        <span class="wi-value" id="wi-network">—</span>
+      </div>
+    </div>
+
+    <!-- Edit / import / generate -->
+    <div class="wallet-section">
+      <h4>Update Wallet</h4>
+      <div class="wallet-form">
+        <div>
+          <label>Private Key</label>
+          <div class="wallet-input-row">
+            <input id="w-key" type="text" placeholder="0x…" autocomplete="off" spellcheck="false" />
+            <button class="btn-wallet" onclick="deriveAddress()">Derive Address</button>
+          </div>
+        </div>
+        <div>
+          <label>Wallet Address</label>
+          <div class="wallet-input-row">
+            <input id="w-addr" type="text" placeholder="0x…" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+        <div class="wallet-actions">
+          <button class="btn-wallet-primary" onclick="saveWallet()">Save Wallet</button>
+          <button class="btn-wallet-danger" onclick="generateWallet()">Generate New Wallet</button>
+          <span class="wallet-msg" id="w-msg"></span>
+        </div>
+      </div>
+
+      <!-- Generated wallet reveal box -->
+      <div class="wallet-generated" id="w-generated">
+        <div class="wallet-generated-warn">Save your private key — it will not be shown again.</div>
+        <div class="wallet-generated-row">
+          <label>Private Key</label>
+          <div class="wallet-generated-val" id="wg-key" title="Click to select"></div>
+        </div>
+        <div class="wallet-generated-row">
+          <label>Address</label>
+          <div class="wallet-generated-val" id="wg-addr" title="Click to select"></div>
+        </div>
+        <div class="wallet-generated-btns">
+          <button class="btn-wallet" onclick="copyText('wg-key')">Copy Key</button>
+          <button class="btn-wallet" onclick="copyText('wg-addr')">Copy Address</button>
+          <button class="btn-wallet-primary" onclick="useGeneratedWallet()">Use This Wallet</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div><!-- #tab-wallet -->
 
 <footer id="footer">Last updated: —</footer>
 
@@ -749,9 +874,11 @@
   function showTab(name) {
     document.getElementById('tab-dashboard').style.display = name === 'dashboard' ? '' : 'none';
     document.getElementById('tab-config').style.display    = name === 'config'    ? 'flex' : 'none';
+    document.getElementById('tab-wallet').style.display    = name === 'wallet'    ? 'flex' : 'none';
     document.querySelectorAll('.tab-btn').forEach(b =>
       b.classList.toggle('tab-active', b.dataset.tab === name));
     if (name === 'config') loadConfig();
+    if (name === 'wallet') loadWallet();
   }
 
   // ── Config ─────────────────────────────────────────────────────────────────
@@ -770,6 +897,99 @@
       document.getElementById('cfg-min-price').value = c.minGridPrice;
       document.getElementById('cfg-max-price').value = c.maxGridPrice;
     } catch (e) { console.error('Config load error:', e); }
+  }
+
+  // ── Wallet ─────────────────────────────────────────────────────────────────
+
+  async function loadWallet() {
+    try {
+      const resp = await fetch('/api/wallet');
+      if (!resp.ok) return;
+      const w = await resp.json();
+      document.getElementById('wi-address').textContent = w.walletAddress || '—';
+      document.getElementById('wi-key').textContent     = w.privateKeyMasked || '—';
+      const netEl = document.getElementById('wi-network');
+      netEl.innerHTML = w.isMainnet
+        ? '<span class="wi-badge wi-badge-mainnet">Mainnet</span>'
+        : '<span class="wi-badge wi-badge-testnet">Testnet</span>';
+    } catch (e) { console.error('Wallet load error:', e); }
+  }
+
+  async function deriveAddress() {
+    const pk = document.getElementById('w-key').value.trim();
+    if (!pk) { setWalletMsg('Enter a private key first.', '#f85149'); return; }
+    try {
+      const resp = await fetch('/api/wallet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'derive', privateKey: pk })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        document.getElementById('w-addr').value = data.walletAddress;
+        setWalletMsg('Address derived.', '#8b949e');
+      } else {
+        setWalletMsg('Error: ' + (await resp.text()), '#f85149');
+      }
+    } catch (e) { setWalletMsg('Error: ' + e.message, '#f85149'); }
+  }
+
+  async function generateWallet() {
+    if (!confirm('Generate a brand-new wallet? Make sure to save the private key before using it.')) return;
+    try {
+      const resp = await fetch('/api/wallet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'generate' })
+      });
+      if (!resp.ok) { setWalletMsg('Error: ' + (await resp.text()), '#f85149'); return; }
+      const data = await resp.json();
+      document.getElementById('wg-key').textContent  = data.privateKey;
+      document.getElementById('wg-addr').textContent = data.walletAddress;
+      document.getElementById('w-generated').classList.add('visible');
+      setWalletMsg('New wallet generated. Save the key below before using it.', '#d29922');
+    } catch (e) { setWalletMsg('Error: ' + e.message, '#f85149'); }
+  }
+
+  function useGeneratedWallet() {
+    document.getElementById('w-key').value  = document.getElementById('wg-key').textContent;
+    document.getElementById('w-addr').value = document.getElementById('wg-addr').textContent;
+    document.getElementById('w-generated').classList.remove('visible');
+    setWalletMsg('Wallet loaded into form. Click Save Wallet to apply.', '#8b949e');
+  }
+
+  async function saveWallet() {
+    const pk   = document.getElementById('w-key').value.trim();
+    const addr = document.getElementById('w-addr').value.trim();
+    if (!pk || !addr) { setWalletMsg('Both private key and address are required.', '#f85149'); return; }
+    if (!confirm('Save wallet changes? The bot must be restarted to connect with the new wallet.')) return;
+    try {
+      const resp = await fetch('/api/wallet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save', privateKey: pk, walletAddress: addr })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        setWalletMsg(data.message, '#3fb950');
+        document.getElementById('w-key').value  = '';
+        document.getElementById('w-addr').value = '';
+        loadWallet();
+      } else {
+        setWalletMsg('Error: ' + (await resp.text()), '#f85149');
+      }
+    } catch (e) { setWalletMsg('Error: ' + e.message, '#f85149'); }
+  }
+
+  function setWalletMsg(text, color) {
+    const el = document.getElementById('w-msg');
+    el.textContent = text;
+    el.style.color = color;
+  }
+
+  function copyText(id) {
+    const text = document.getElementById(id).textContent;
+    navigator.clipboard.writeText(text).catch(() => {});
   }
 
   async function applyConfig() {

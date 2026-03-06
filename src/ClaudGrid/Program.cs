@@ -6,6 +6,7 @@ using ClaudGrid.Exchange;
 using ClaudGrid.Risk;
 using ClaudGrid.Strategy;
 using ClaudGrid.Web;
+using Nethereum.Signer;
 
 // ── Host setup ────────────────────────────────────────────────────────────────
 
@@ -99,7 +100,7 @@ app.MapGet("/api/config", (GridConfig grid, RiskConfig risk) =>
         maxGridPrice         = risk.MaxGridPrice
     }, jsonOptions));
 
-app.MapPost("/api/config", async (ConfigUpdateRequest req, GridConfig grid, RiskConfig risk, GridStrategy strategy) =>
+app.MapPost("/api/config", async (ConfigUpdateRequest req, GridConfig grid, RiskConfig risk, GridStrategy strategy, BotConfig cfg) =>
 {
     if (req.GridLevels < 4)                                  return Results.BadRequest("GridLevels must be >= 4");
     if (req.GridSpacingPercent <= 0)                         return Results.BadRequest("GridSpacingPercent must be > 0");
@@ -119,9 +120,55 @@ app.MapPost("/api/config", async (ConfigUpdateRequest req, GridConfig grid, Risk
     risk.MinGridPrice        = req.MinGridPrice;
     risk.MaxGridPrice        = req.MaxGridPrice;
 
-    await PersistRuntimeConfigAsync(grid, risk);
+    await PersistRuntimeConfigAsync(cfg);
     await strategy.ResetAsync();
     return Results.Ok();
+});
+
+app.MapGet("/api/wallet", (BotConfig cfg) =>
+    Results.Json(new
+    {
+        walletAddress    = cfg.WalletAddress,
+        privateKeyMasked = MaskKey(cfg.PrivateKey),
+        isMainnet        = cfg.IsMainnet
+    }, jsonOptions));
+
+app.MapPost("/api/wallet", async (WalletActionRequest req, BotConfig cfg) =>
+{
+    switch (req.Action?.ToLower())
+    {
+        case "generate":
+        {
+            var key  = EthECKey.GenerateKey();
+            string pk   = "0x" + key.GetPrivateKey();
+            string addr = key.GetPublicAddress();
+            return Results.Json(new { privateKey = pk, walletAddress = addr }, jsonOptions);
+        }
+        case "derive":
+        {
+            if (string.IsNullOrWhiteSpace(req.PrivateKey))
+                return Results.BadRequest("privateKey required");
+            EthECKey key;
+            try   { key = new EthECKey(req.PrivateKey); }
+            catch { return Results.BadRequest("Invalid private key"); }
+            return Results.Json(new { walletAddress = key.GetPublicAddress() }, jsonOptions);
+        }
+        case "save":
+        {
+            if (string.IsNullOrWhiteSpace(req.PrivateKey))
+                return Results.BadRequest("privateKey required");
+            if (string.IsNullOrWhiteSpace(req.WalletAddress))
+                return Results.BadRequest("walletAddress required");
+            try   { _ = new EthECKey(req.PrivateKey); }
+            catch { return Results.BadRequest("Invalid private key"); }
+            cfg.PrivateKey     = req.PrivateKey;
+            cfg.WalletAddress  = req.WalletAddress;
+            await PersistRuntimeConfigAsync(cfg);
+            return Results.Json(new { message = "Wallet saved. Restart the bot to connect with the new wallet." }, jsonOptions);
+        }
+        default:
+            return Results.BadRequest("Unknown action. Use: generate, derive, save");
+    }
 });
 
 app.MapGet("/", () => Results.Redirect("/index.html"));
@@ -130,31 +177,39 @@ await app.RunAsync();
 
 // ── Config validation ─────────────────────────────────────────────────────────
 
-static async Task PersistRuntimeConfigAsync(GridConfig grid, RiskConfig risk)
+static async Task PersistRuntimeConfigAsync(BotConfig cfg)
 {
     var doc = new
     {
         Bot = new
         {
+            PrivateKey    = cfg.PrivateKey,
+            WalletAddress = cfg.WalletAddress,
             Grid = new
             {
-                grid.GridLevels,
-                grid.GridSpacingPercent,
-                grid.OrderSizeBtc,
-                grid.SyncIntervalSeconds
+                cfg.Grid.GridLevels,
+                cfg.Grid.GridSpacingPercent,
+                cfg.Grid.OrderSizeBtc,
+                cfg.Grid.SyncIntervalSeconds
             },
             Risk = new
             {
-                risk.MaxPositionSizeBtc,
-                risk.MaxDrawdownPercent,
-                risk.MinGridPrice,
-                risk.MaxGridPrice
+                cfg.Risk.MaxPositionSizeBtc,
+                cfg.Risk.MaxDrawdownPercent,
+                cfg.Risk.MinGridPrice,
+                cfg.Risk.MaxGridPrice
             }
         }
     };
     var json = JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true });
     await File.WriteAllTextAsync(
         Path.Combine(AppContext.BaseDirectory, "appsettings.Runtime.json"), json);
+}
+
+static string MaskKey(string key)
+{
+    if (string.IsNullOrEmpty(key) || key.Length <= 12) return "••••••••";
+    return key[..8] + "••••••••••••••••••••••••••" + key[^4..];
 }
 
 static void ValidateConfig(BotConfig cfg)
@@ -188,3 +243,5 @@ record ConfigUpdateRequest(
     decimal MaxDrawdownPercent,
     decimal MinGridPrice,
     decimal MaxGridPrice);
+
+record WalletActionRequest(string Action, string? PrivateKey = null, string? WalletAddress = null);
