@@ -182,7 +182,23 @@ public sealed class GridBot : BackgroundService
         _logger.LogInformation(
             "Shutting down. Total syncs: {Count}, Realized PnL: {Pnl:F4} USDC",
             _syncCount, _strategy.RealizedPnl);
-        // Leave orders on the book — remove this if you want cancel-on-exit
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            _logger.LogInformation("Cancelling all open orders...");
+            int cancelled = await _exchange.CancelAllOrdersAsync(_config.Grid.AssetIndex, cts.Token);
+            _logger.LogInformation("Cancelled {Count} orders.", cancelled);
+
+            _logger.LogInformation("Closing open position...");
+            int closed = await _exchange.CloseAllPositionsAsync(_config.Grid.Symbol, _config.Grid.AssetIndex, cts.Token);
+            if (closed == 0)
+                _logger.LogInformation("No open position to close.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error during shutdown cleanup. Open orders or positions may remain.");
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
