@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ClaudGrid Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -572,11 +571,7 @@
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: { mode: 'index', intersect: false },
-          annotation: { annotations: {} }
-        },
+        plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
         scales: {
           x: { display: false },
           y: {
@@ -641,7 +636,6 @@
   function updateCharts(d) {
     const ph = d.priceHistory || [];
     const labels = ph.map(p => fmtT(p.time));
-    const timestamps = ph.map(p => new Date(p.time).getTime());
     priceChart.data.labels = labels;
     priceChart.data.datasets[0].data = ph.map(p => p.price);
 
@@ -663,42 +657,6 @@
         };
       })
     );
-
-    // Fill annotations — vertical lines on the price chart
-    const fills = d.recentFills || [];
-    const annotations = {};
-    fills.forEach((f, i) => {
-      const fillMs = new Date(f.time).getTime();
-      // Find the closest price history label
-      let bestIdx = 0, bestDiff = Infinity;
-      timestamps.forEach((ts, idx) => {
-        const diff = Math.abs(ts - fillMs);
-        if (diff < bestDiff) { bestDiff = diff; bestIdx = idx; }
-      });
-      if (bestDiff > 120_000) return; // skip if >2 min from any price point
-      const color = f.isClose        ? 'rgba(210,153,34,0.85)'
-                  : f.side === 'Buy' ? 'rgba(63,185,80,0.75)'
-                  :                    'rgba(248,81,73,0.75)';
-      const label = f.isClose ? 'C' : f.side === 'Buy' ? 'B' : 'S';
-      annotations['fill_' + i] = {
-        type: 'line',
-        scaleID: 'x',
-        value: labels[bestIdx],
-        borderColor: color,
-        borderWidth: 1.5,
-        borderDash: [4, 3],
-        label: {
-          display: true,
-          content: label,
-          position: 'start',
-          backgroundColor: 'transparent',
-          color: color,
-          font: { size: 9, weight: 'bold' },
-          yAdjust: 4
-        }
-      };
-    });
-    priceChart.options.plugins.annotation.annotations = annotations;
 
     priceChart.update('none');
 
