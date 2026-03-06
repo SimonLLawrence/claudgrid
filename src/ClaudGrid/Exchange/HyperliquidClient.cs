@@ -137,9 +137,13 @@ public sealed class HyperliquidClient : IExchangeClient
         OrderSide side,
         decimal price,
         decimal size,
+        bool postOnly = true,
         CancellationToken ct = default)
     {
         long nonce = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        // Alo = Add Liquidity Only (maker/post-only); Gtc = Good Till Cancel (taker fallback)
+        string tif = postOnly ? "Alo" : "Gtc";
 
         // Build the order wire object
         var orderWire = new Dictionary<string, object>
@@ -151,7 +155,7 @@ public sealed class HyperliquidClient : IExchangeClient
             ["r"] = false,
             ["t"] = new Dictionary<string, object>
             {
-                ["limit"] = new Dictionary<string, object> { ["tif"] = "Alo" }
+                ["limit"] = new Dictionary<string, object> { ["tif"] = tif }
             }
         };
 

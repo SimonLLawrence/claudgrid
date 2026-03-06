@@ -18,7 +18,9 @@ public interface IExchangeClient
     Task<List<Order>> GetOpenOrdersAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// Places a GTC limit order. Returns the exchange-assigned order ID.
+    /// Places a limit order. Returns the exchange-assigned order ID.
+    /// postOnly=true uses Alo (maker-only, rejected if it would cross the spread).
+    /// postOnly=false uses Gtc (fills as taker if it crosses the spread).
     /// </summary>
     Task<long> PlaceLimitOrderAsync(
         string symbol,
@@ -26,6 +28,7 @@ public interface IExchangeClient
         OrderSide side,
         decimal price,
         decimal size,
+        bool postOnly = true,
         CancellationToken ct = default);
 
     /// <summary>Cancels a single order. Returns true if successfully cancelled.</summary>

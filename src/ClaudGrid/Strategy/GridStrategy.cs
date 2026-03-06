@@ -256,6 +256,7 @@ public IReadOnlyList<GridLevel> Levels => _levels;
                 level.Side == GridLevelSide.Buy ? OrderSide.Buy : OrderSide.Sell,
                 level.Price,
                 level.Size,
+                postOnly: true,
                 ct);
 
             level.OrderId = orderId;
@@ -340,6 +341,7 @@ public IReadOnlyList<GridLevel> Levels => _levels;
                 counterSide,
                 counterPrice,
                 size,
+                postOnly: false,
                 ct);
 
             level.PendingCounters.Add(new PendingCounter(orderId, size));

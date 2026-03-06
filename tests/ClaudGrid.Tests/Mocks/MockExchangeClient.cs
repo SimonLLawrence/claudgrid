@@ -65,7 +65,7 @@ public sealed class MockExchangeClient : IExchangeClient
 
     public Task<long> PlaceLimitOrderAsync(
         string symbol, int assetIndex, OrderSide side,
-        decimal price, decimal size, CancellationToken ct = default)
+        decimal price, decimal size, bool postOnly = true, CancellationToken ct = default)
     {
         if (ThrowOnPlaceOrder)
             throw new HttpRequestException("Mock exchange error");
