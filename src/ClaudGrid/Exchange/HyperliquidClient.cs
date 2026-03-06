@@ -151,7 +151,7 @@ public sealed class HyperliquidClient : IExchangeClient
             ["r"] = false,
             ["t"] = new Dictionary<string, object>
             {
-                ["limit"] = new Dictionary<string, object> { ["tif"] = "Gtc" }
+                ["limit"] = new Dictionary<string, object> { ["tif"] = "Alo" }
             }
         };
 
